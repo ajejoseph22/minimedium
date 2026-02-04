@@ -417,14 +417,14 @@ export const getCommentsByArticle = async (slug: string, id?: number) => {
   const queries = [];
 
   queries.push({
-    author: {
+    user: {
       demo: true,
     },
   });
 
   if (id) {
     queries.push({
-      author: {
+      user: {
         id,
       },
     });
@@ -444,7 +444,7 @@ export const getCommentsByArticle = async (slug: string, id?: number) => {
           createdAt: true,
           updatedAt: true,
           body: true,
-          author: {
+          user: {
             select: {
               username: true,
               bio: true,
@@ -460,10 +460,10 @@ export const getCommentsByArticle = async (slug: string, id?: number) => {
   const result = comments?.comments.map((comment: any) => ({
     ...comment,
     author: {
-      username: comment.author.username,
-      bio: comment.author.bio,
-      image: comment.author.image,
-      following: comment.author.followedBy.some((follow: any) => follow.id === id),
+      username: comment.user.username,
+      bio: comment.user.bio,
+      image: comment.user.image,
+      following: comment.user.followedBy.some((follow: any) => follow.id === id),
     },
   }));
 
@@ -492,14 +492,14 @@ export const addComment = async (body: string, slug: string, id: number) => {
           id: article?.id,
         },
       },
-      author: {
+      user: {
         connect: {
           id: id,
         },
       },
     },
     include: {
-      author: {
+      user: {
         select: {
           username: true,
           bio: true,
@@ -516,10 +516,10 @@ export const addComment = async (body: string, slug: string, id: number) => {
     updatedAt: comment.updatedAt,
     body: comment.body,
     author: {
-      username: comment.author.username,
-      bio: comment.author.bio,
-      image: comment.author.image,
-      following: comment.author.followedBy.some((follow: any) => follow.id === id),
+      username: comment.user.username,
+      bio: comment.user.bio,
+      image: comment.user.image,
+      following: comment.user.followedBy.some((follow: any) => follow.id === id),
     },
   };
 };
@@ -528,12 +528,12 @@ export const deleteComment = async (id: number, userId: number) => {
   const comment = await prisma.comment.findFirst({
     where: {
       id,
-      author: {
+      user: {
         id: userId,
       },
     },
     select: {
-      author: {
+      user: {
         select: {
           id: true,
           username: true,
@@ -546,7 +546,7 @@ export const deleteComment = async (id: number, userId: number) => {
     throw new HttpException(404, {});
   }
 
-  if (comment.author.id !== userId) {
+  if (comment.user.id !== userId) {
     throw new HttpException(403, {
       message: 'You are not authorized to delete this comment',
     });
