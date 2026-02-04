@@ -21,7 +21,6 @@ export const DEFAULT_CONFIG: ImportExportConfig = {
   exportConcurrentLimitGlobal: 20,
 
   workerConcurrency: 4,
-  pollIntervalMs: 1000,
 };
 
 /**
@@ -53,6 +52,5 @@ export function loadConfig(): ImportExportConfig {
       parseInt(process.env.EXPORT_CONCURRENT_LIMIT_GLOBAL || '', 10) || DEFAULT_CONFIG.exportConcurrentLimitGlobal,
 
     workerConcurrency: parseInt(process.env.JOB_WORKER_CONCURRENCY || '', 10) || DEFAULT_CONFIG.workerConcurrency,
-    pollIntervalMs: parseInt(process.env.JOB_POLL_INTERVAL_MS || '', 10) || DEFAULT_CONFIG.pollIntervalMs,
   };
 }

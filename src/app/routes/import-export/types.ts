@@ -466,5 +466,4 @@ export interface ImportExportConfig {
 
   // Worker
   workerConcurrency: number;
-  pollIntervalMs: number;
 }
