@@ -452,7 +452,8 @@ export interface ImportExportConfig {
 
   // Export
   fileRetentionHours: number;
-  storagePath: string;
+  exportStoragePath: string;
+  importStoragePath: string;
 
   // Rate limits
   importRateLimitPerHour: number;
