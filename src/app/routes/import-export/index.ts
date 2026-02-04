@@ -7,3 +7,4 @@
 export * from './types';
 export * from './config';
 export * from './intake.service';
+export * from './parser';
