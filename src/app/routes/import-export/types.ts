@@ -351,7 +351,7 @@ export interface RecordErrorsResponse {
  */
 export interface UserImportRecord {
   id?: number;
-  email: string;
+  email?: string;
   name: string;
   role?: string;
   active?: boolean;
