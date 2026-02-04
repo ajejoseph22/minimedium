@@ -8,6 +8,31 @@ generator client {
   previewFeatures = []
 }
 
+enum JobStatus {
+  queued
+  running
+  partial
+  succeeded
+  failed
+  cancelled
+}
+
+enum ImportExportFormat {
+  ndjson
+  json
+}
+
+enum ImportExportResource {
+  users
+  articles
+  comments
+}
+
+enum ImportSourceType {
+  upload
+  url
+}
+
 model Article {
   id          Int       @id @default(autoincrement())
   slug        String    @unique
@@ -59,5 +84,88 @@ model User {
   followedBy User[]    @relation("UserFollows")
   following  User[]    @relation("UserFollows")
   comments   Comment[]
+  importJobs ImportJob[]
+  exportJobs ExportJob[]
   demo       Boolean   @default(false)
+}
+
+model ImportJob {
+  id               String               @id @default(uuid())
+  status           JobStatus            @default(queued)
+  resource         ImportExportResource
+  format           ImportExportFormat
+  sourceType       ImportSourceType
+  sourceLocation   String?
+  fileName         String?
+  fileSize         Int?
+  requestHash      String?
+  idempotencyKey   String?
+
+  totalRecords     Int?
+  processedRecords Int                  @default(0)
+  successCount     Int                  @default(0)
+  errorCount       Int                  @default(0)
+
+  errorSummary     Json?
+
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  startedAt        DateTime?
+  finishedAt       DateTime?
+
+  createdById      Int
+  createdBy        User                 @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  errors           ImportError[]
+
+  @@unique([createdById, idempotencyKey, resource])
+}
+
+model ImportError {
+  id          String   @id @default(uuid())
+  jobId       String
+  job         ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  recordIndex Int
+  recordId    String?
+  errorCode   Int
+  errorName   String
+  message     String
+  field       String?
+  value       Json?
+  details     Json?
+
+  createdAt   DateTime @default(now())
+
+}
+
+model ExportJob {
+  id               String               @id @default(uuid())
+  status           JobStatus            @default(queued)
+  resource         ImportExportResource
+  format           ImportExportFormat
+
+  filters          Json?
+  fields           Json?
+
+  totalRecords     Int?
+  processedRecords Int                  @default(0)
+
+  outputLocation   String?
+  downloadUrl      String?
+  fileSize         Int?
+  expiresAt        DateTime?
+
+  requestHash      String?
+  idempotencyKey   String?
+
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  startedAt        DateTime?
+  finishedAt       DateTime?
+
+  createdById      Int
+  createdBy        User                 @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@unique([createdById, idempotencyKey, resource])
 }
