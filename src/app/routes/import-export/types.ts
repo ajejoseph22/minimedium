@@ -42,7 +42,6 @@ export interface ImportJob {
   processedRecords: number;
   successCount: number;
   errorCount: number;
-  skippedCount: number;
 
   // Timing
   createdAt: Date;
