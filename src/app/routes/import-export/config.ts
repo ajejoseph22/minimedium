@@ -14,6 +14,8 @@ export const DEFAULT_CONFIG: ImportExportConfig = {
   errorReportStoragePath: './import-errors',
   importStoragePath: './imports',
 
+  exportStreamMaxLimit: 1000,
+
   importRateLimitPerHour: 10,
   exportRateLimitPerHour: 20,
 
@@ -40,6 +42,9 @@ export function loadConfig(): ImportExportConfig {
     exportStoragePath: process.env.EXPORT_STORAGE_PATH || DEFAULT_CONFIG.exportStoragePath,
     errorReportStoragePath: process.env.ERROR_REPORT_STORAGE_PATH || DEFAULT_CONFIG.errorReportStoragePath,
     importStoragePath: process.env.IMPORT_STORAGE_PATH || DEFAULT_CONFIG.importStoragePath,
+
+    exportStreamMaxLimit:
+      parseInt(process.env.EXPORT_STREAM_MAX_LIMIT || '', 10) || DEFAULT_CONFIG.exportStreamMaxLimit,
 
     importRateLimitPerHour:
       parseInt(process.env.IMPORT_RATE_LIMIT_PER_HOUR || '', 10) || DEFAULT_CONFIG.importRateLimitPerHour,

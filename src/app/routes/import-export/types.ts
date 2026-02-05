@@ -475,6 +475,7 @@ export interface ImportExportConfig {
   exportStoragePath: string;
   errorReportStoragePath: string;
   importStoragePath: string;
+  exportStreamMaxLimit: number;
 
   // Rate limits
   importRateLimitPerHour: number;
