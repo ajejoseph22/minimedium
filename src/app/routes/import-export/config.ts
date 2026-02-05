@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG: ImportExportConfig = {
 
   fileRetentionHours: 24,
   exportStoragePath: './exports',
+  errorReportStoragePath: './import-errors',
   importStoragePath: './imports',
 
   importRateLimitPerHour: 10,
@@ -37,6 +38,7 @@ export function loadConfig(): ImportExportConfig {
     fileRetentionHours:
       parseInt(process.env.EXPORT_FILE_RETENTION_HOURS || '', 10) || DEFAULT_CONFIG.fileRetentionHours,
     exportStoragePath: process.env.EXPORT_STORAGE_PATH || DEFAULT_CONFIG.exportStoragePath,
+    errorReportStoragePath: process.env.ERROR_REPORT_STORAGE_PATH || DEFAULT_CONFIG.errorReportStoragePath,
     importStoragePath: process.env.IMPORT_STORAGE_PATH || DEFAULT_CONFIG.importStoragePath,
 
     importRateLimitPerHour:

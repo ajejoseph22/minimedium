@@ -56,6 +56,9 @@ export interface ImportJob {
   fileName: string | null;
   fileSize: number | null;
   sourceUrl: string | null;
+
+  // Error reporting
+  errorSummary?: ErrorReportSummary | null;
 }
 
 /**
@@ -69,6 +72,21 @@ export interface CreateImportJobOptions {
   fileName?: string;
   fileSize?: number;
   sourceUrl?: string;
+}
+
+// =============================================================================
+// Error Report Types
+// =============================================================================
+
+export type ErrorReportStatus = 'complete' | 'partial' | 'failed';
+
+export interface ErrorReportSummary {
+  reportStatus: ErrorReportStatus;
+  persistedErrorCount: number;
+  persistenceFailures: number;
+  reportLocation?: string | null;
+  reportFormat?: FileFormat | null;
+  reportGenerationFailed?: boolean;
 }
 
 // =============================================================================
@@ -455,6 +473,7 @@ export interface ImportExportConfig {
   // Export
   fileRetentionHours: number;
   exportStoragePath: string;
+  errorReportStoragePath: string;
   importStoragePath: string;
 
   // Rate limits

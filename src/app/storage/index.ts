@@ -7,6 +7,11 @@ export function createExportStorageAdapter(): StorageAdapter {
   return new LocalStorage(exportStoragePath);
 }
 
+export function createErrorReportStorageAdapter(): StorageAdapter {
+  const { errorReportStoragePath } = loadConfig();
+  return new LocalStorage(errorReportStoragePath);
+}
+
 export function createImportStorageAdapter(): StorageAdapter {
   const { importStoragePath } = loadConfig();
   return new LocalStorage(importStoragePath);

@@ -10,6 +10,7 @@ import { ImportExportParseError, parseJsonArrayStream, parseNdjsonStream } from 
 import { upsertImportRecords, IndexedImportRecord } from './upsert.service';
 import { validateImportRecord } from './validation.service';
 import { createValidationCache } from './validation.validators';
+import { generateImportErrorReport } from './error-report.service';
 import {
   CreateRecordErrorOptions,
   EntityType,
@@ -95,11 +96,30 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
   let processedRecords = 0;
   let successCount = 0;
   let errorCount = 0;
+  let persistedErrorCount = 0;
+  let errorPersistenceFailures = 0;
   let cancelled = false;
 
   let pendingRecords: IndexedImportRecord[] = [];
   let pendingErrors: RecordErrorPayload[] = [];
   const errorRecordIndexes = new Set<number>();
+  let errorReportLocation: string | null = null;
+  let errorReportFormat: FileFormat | null = null;
+  let errorReportGenerationFailed = false;
+
+  const generateErrorReport = async (): Promise<void> => {
+    if (persistedErrorCount <= 0) {
+      return;
+    }
+    const reportFormat = job.format === 'json' ? 'json' : 'ndjson';
+    try {
+      const report = await generateImportErrorReport(jobId, { prisma, format: reportFormat });
+      errorReportLocation = report.location;
+      errorReportFormat = report.format;
+    } catch {
+      errorReportGenerationFailed = true;
+    }
+  };
 
   const addErrorRecordIndexes = (entries: RecordErrorPayload[]): number => {
     let added = 0;
@@ -121,9 +141,13 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     const payload = pendingErrors.map((entry) =>
       buildImportErrorPayload(entry.error, entry.recordId, entry.details),
     );
-    const result = await prisma.importError.createMany({ data: payload });
+    try {
+      const result = await prisma.importError.createMany({ data: payload });
+      persistedErrorCount += typeof result?.count === 'number' ? result.count : payload.length;
+    } catch {
+      errorPersistenceFailures += payload.length;
+    }
     pendingErrors = [];
-    void result;
   };
 
   const flushRecords = async () => {
@@ -209,6 +233,13 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
         errorCount,
         totalRecords: processedRecords,
         finishedAt: now(),
+        errorSummary: buildErrorSummary(
+          persistedErrorCount,
+          errorPersistenceFailures,
+          errorReportLocation,
+          errorReportFormat,
+          errorReportGenerationFailed,
+        ),
       });
       return { status: 'cancelled', processedRecords, successCount, errorCount };
     }
@@ -216,6 +247,8 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     if (processedRecords === 0) {
       throw new ImportPipelineError(FileErrorCode.EMPTY_FILE, 'Import file contained no records');
     }
+
+    await generateErrorReport();
 
     const status: JobStatus = errorCount > 0 ? 'partial' : 'succeeded';
     await finalizeJob(prisma, jobId, {
@@ -225,11 +258,25 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
       errorCount,
       totalRecords: processedRecords,
       finishedAt: now(),
+      errorSummary: buildErrorSummary(
+        persistedErrorCount,
+        errorPersistenceFailures,
+        errorReportLocation,
+        errorReportFormat,
+        errorReportGenerationFailed,
+      ),
     });
 
     return { status, processedRecords, successCount, errorCount };
   } catch (error) {
-    await safeFlushErrors(pendingErrors, prisma);
+    await safeFlushErrors(pendingErrors, prisma, {
+      onPersisted: (count) => {
+        persistedErrorCount += count;
+      },
+      onFailed: (count) => {
+        errorPersistenceFailures += count;
+      },
+    });
     const { code, details, message } = normalizePipelineError(error);
     const recordIndex = -1;
     const fatalError: RecordErrorPayload = {
@@ -243,13 +290,19 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
       details,
     };
 
+    errorCount += addErrorRecordIndexes([fatalError]);
+
     try {
-      await prisma.importError.createMany({
+      const result = await prisma.importError.createMany({
         data: [buildImportErrorPayload(fatalError.error, fatalError.recordId, fatalError.details)],
       });
+      persistedErrorCount += typeof result?.count === 'number' ? result.count : 1;
     } catch {
+      errorPersistenceFailures += 1;
       // swallow to ensure job status is updated even if error persistence fails
     }
+
+    await generateErrorReport();
 
     await finalizeJob(prisma, jobId, {
       status: 'failed',
@@ -258,6 +311,13 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
       errorCount,
       totalRecords: processedRecords,
       finishedAt: now(),
+      errorSummary: buildErrorSummary(
+        persistedErrorCount,
+        errorPersistenceFailures,
+        errorReportLocation,
+        errorReportFormat,
+        errorReportGenerationFailed,
+      ),
     });
 
     return { status: 'failed', processedRecords, successCount, errorCount };
@@ -374,6 +434,7 @@ async function finalizeJob(
     errorCount: number;
     totalRecords: number | null;
     finishedAt: Date;
+    errorSummary?: Prisma.InputJsonValue;
   },
 ): Promise<void> {
   await prisma.importJob.update({
@@ -385,6 +446,7 @@ async function finalizeJob(
       errorCount: update.errorCount,
       totalRecords: update.totalRecords,
       finishedAt: update.finishedAt,
+      errorSummary: update.errorSummary,
     },
   });
 }
@@ -428,6 +490,7 @@ function normalizePipelineError(error: unknown): {
 async function safeFlushErrors(
   pendingErrors: RecordErrorPayload[],
   prisma: PrismaClient,
+  handlers: { onPersisted: (count: number) => void; onFailed: (count: number) => void },
 ): Promise<void> {
   if (!pendingErrors.length) {
     return;
@@ -438,8 +501,34 @@ async function safeFlushErrors(
       buildImportErrorPayload(entry.error, entry.recordId, entry.details),
     );
     const result = await prisma.importError.createMany({ data: payload });
-    void result;
+    handlers.onPersisted(typeof result?.count === 'number' ? result.count : payload.length);
   } catch {
     // ignore to avoid masking the primary failure
+    handlers.onFailed(pendingErrors.length);
   }
+}
+
+function buildErrorSummary(
+  persistedErrorCount: number,
+  errorPersistenceFailures: number,
+  errorReportLocation: string | null,
+  errorReportFormat: FileFormat | null,
+  reportGenerationFailed: boolean,
+): Prisma.InputJsonValue {
+  const reportStatus = reportGenerationFailed
+    ? 'failed'
+    : errorPersistenceFailures === 0
+      ? 'complete'
+      : persistedErrorCount === 0
+        ? 'failed'
+        : 'partial';
+
+  return {
+    reportStatus,
+    persistedErrorCount,
+    persistenceFailures: errorPersistenceFailures,
+    reportLocation: errorReportLocation,
+    reportFormat: errorReportFormat,
+    reportGenerationFailed,
+  };
 }

@@ -40,14 +40,24 @@ jest.mock('../../app/routes/import-export/upsert.service', () => ({
   upsertImportRecords: jest.fn(),
 }));
 
-import { parseJsonArrayStream } from '../../app/routes/import-export/parsing.service';
-import { validateImportRecord } from '../../app/routes/import-export/validation.service';
-import { upsertImportRecords } from '../../app/routes/import-export/upsert.service';
+jest.mock('../../app/routes/import-export/error-report.service', () => ({
+  generateImportErrorReport: jest.fn().mockResolvedValue({
+    key: 'import-errors/job-1.ndjson',
+    location: '/tmp/import-errors/job-1.ndjson',
+    bytes: 0,
+    format: 'ndjson',
+    errorCount: 2,
+  }),
+}));
+
+import { parseJsonArrayStream } from '../../app/routes/import-export';
+import { validateImportRecord } from '../../app/routes/import-export';
+import { upsertImportRecords } from '../../app/routes/import-export';
 
 const prisma = prismaMock as unknown as any;
 
 describe('Import Service', () => {
-  it('should increment errorCount only for persisted errors', async () => {
+  it('should count distinct records with errors', async () => {
     prisma.importJob.findUnique.mockResolvedValue({
       id: 'job-1',
       status: 'queued',
