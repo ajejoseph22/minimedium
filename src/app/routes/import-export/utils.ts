@@ -24,3 +24,27 @@ export function isPrivateIp(ip: string): boolean {
 function isIPv6Address(addr: ipaddr.IPv4 | ipaddr.IPv6): addr is ipaddr.IPv6 {
   return addr.kind() === 'ipv6';
 }
+
+export function sanitizeValue(value: unknown): unknown {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 10);
+  }
+
+  if (typeof value === 'object') {
+    return '[object]';
+  }
+
+  return String(value);
+}

@@ -1,6 +1,7 @@
 import prismaClient from '../../../prisma/prisma-client';
 import { CreateRecordErrorOptions, ValidationErrorCode } from './types';
 import type { PrismaClient } from '@prisma/client';
+import { sanitizeValue } from './utils';
 
 export interface ValidationCache {
   seenEmails: Set<string>;
@@ -177,24 +178,4 @@ async function lookupArticleExists(
   const exists = (await prisma.article.count({ where: { id: articleId } })) > 0;
   cache.articleIdLookup.set(articleId, exists);
   return exists;
-}
-
-function sanitizeValue(value: unknown): unknown {
-  if (value === undefined || value === null) {
-    return null;
-  }
-
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 10);
-  }
-
-  if (typeof value === 'object') {
-    return '[object]';
-  }
-
-  return String(value);
 }

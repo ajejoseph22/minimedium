@@ -1,8 +1,8 @@
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import slugify from 'slugify';
-import prismaClient from '../../../prisma/prisma-client';
 import type { Prisma, PrismaClient } from '@prisma/client';
+import prismaClient from '../../../prisma/prisma-client';
 import {
   ArticleImportRecord,
   CommentImportRecord,
@@ -13,6 +13,9 @@ import {
   ValidationErrorCode,
 } from './types';
 import { loadConfig } from './config';
+import { sanitizeValue } from './utils';
+
+const config = loadConfig();
 
 export interface IndexedImportRecord<TRecord extends ImportRecord = ImportRecord> {
   record: TRecord;
@@ -38,13 +41,25 @@ interface RecordOperation {
   execute: () => Prisma.PrismaPromise<unknown>;
 }
 
+class UpsertRecordError extends Error {
+  constructor(
+    public errorCode: ValidationErrorCode | ProcessingErrorCode,
+    public field: string,
+    public value: unknown,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'UpsertRecordError';
+  }
+}
+
 export async function upsertImportRecords(
   records: IndexedImportRecord[],
   entityType: EntityType,
   options: BatchUpsertOptions,
 ): Promise<BatchUpsertResult> {
   const prisma = options.prisma ?? prismaClient;
-  const batchSize = options.batchSize ?? loadConfig().batchSize;
+  const batchSize = options.batchSize ?? config.batchSize;
   const result: BatchUpsertResult = {
     attempted: records.length,
     succeeded: 0,
@@ -68,7 +83,7 @@ async function upsertBatch(
   entityType: EntityType,
   jobId: string,
 ): Promise<BatchUpsertResult> {
-  if (records.length === 0) {
+  if (!records.length) {
     return { attempted: 0, succeeded: 0, failed: 0, errors: [] };
   }
 
@@ -87,12 +102,11 @@ async function upsertBatch(
       errors: [],
     };
   } catch (error) {
-    return await fallbackPerRecord(prisma, operations, entityType, jobId, records.length);
+    return await fallbackPerRecord(operations, entityType, jobId, records.length);
   }
 }
 
 async function fallbackPerRecord(
-  prisma: PrismaClient,
   operations: RecordOperation[],
   entityType: EntityType,
   jobId: string,
@@ -139,7 +153,7 @@ async function buildOperations(
     case 'comments':
       return buildCommentOperations(prisma, records);
     default:
-      return [];
+      throw new Error(`Unsupported entity type: ${entityType}`);
   }
 }
 
@@ -148,6 +162,14 @@ async function buildUserOperations(
   records: IndexedImportRecord[],
 ): Promise<RecordOperation[]> {
   const operations: RecordOperation[] = [];
+  let defaultPasswordHash: string | null = null;
+
+  const getDefaultPasswordHash = async () => {
+    if (!defaultPasswordHash) {
+      defaultPasswordHash = await bcrypt.hash(randomUUID(), 10);
+    }
+    return defaultPasswordHash;
+  };
 
   for (const entry of records) {
     const record = entry.record as any;
@@ -166,7 +188,7 @@ async function buildUserOperations(
 
     if (canCreate) {
       const username = deriveUsername(email, record.name);
-      const password = await bcrypt.hash(randomUUID(), 10);
+      const password = await getDefaultPasswordHash();
       const createData: Prisma.UserCreateInput = {
         ...(record.id ? { id: record.id } : {}),
         email,
@@ -184,6 +206,23 @@ async function buildUserOperations(
         record: entry.record,
         recordIndex: entry.recordIndex,
         execute: () => prisma.user.upsert({ where, update: updateData, create: createData }),
+      });
+      continue;
+    }
+
+    if (!record.id) {
+      operations.push({
+        record: entry.record,
+        recordIndex: entry.recordIndex,
+        execute: () =>
+          Promise.reject(
+            new UpsertRecordError(
+              ValidationErrorCode.MISSING_REQUIRED_FIELD,
+              'id',
+              null,
+              'User record missing id for update',
+            ),
+          ) as Prisma.PrismaPromise<unknown>,
       });
       continue;
     }
@@ -211,16 +250,24 @@ async function buildArticleOperations(
     const tagsProvided = Array.isArray(record.tags);
     const status = normalizeArticleStatus(record.status, record.published_at);
     const publishedAt = record.published_at ? new Date(record.published_at) : null;
+    const isDraft = record.status === 'draft';
 
     const updateData: Prisma.ArticleUpdateInput = {
       ...(slug ? { slug } : {}),
       ...(record.title ? { title: record.title.trim() } : {}),
       ...(record.body ? { body: record.body.trim() } : {}),
-      ...(record.title || record.body ? { description: buildDescription(record.title, record.body) } : {}),
-      ...(record.author_id ? { author: { connect: { id: record.author_id } } } : {}),
+      ...(record.title || record.body
+        ? { description: buildDescription(record.title, record.body) }
+        : {}),
+      ...(record.author_id
+        ? { author: { connect: { id: record.author_id } } }
+        : {}),
       ...(status ? { status } : {}),
-      ...(record.status === 'draft' ? { publishedAt: null } : {}),
-      ...(record.published_at ? { publishedAt } : {}),
+      ...(isDraft
+        ? { publishedAt: null }
+        : record.published_at
+        ? { publishedAt }
+        : {}),
       ...(tagsProvided
         ? {
             tagList: {
@@ -365,9 +412,11 @@ function normalizeArticleStatus(status?: string, publishedAt?: string): string |
 
 function buildDescription(title?: string, body?: string): string {
   const fallback = title?.trim() || body?.trim() || 'Imported article';
+
   if (!body) {
     return fallback;
   }
+
   return fallback.length > 160 ? fallback.slice(0, 160) : fallback;
 }
 
@@ -375,10 +424,13 @@ function parseDate(value?: string): Date | undefined {
   if (!value) {
     return undefined;
   }
+
   const parsed = new Date(value);
+
   if (Number.isNaN(parsed.getTime())) {
     return undefined;
   }
+
   return parsed;
 }
 
@@ -388,6 +440,7 @@ function chunkArray<T>(items: T[], size: number): T[][] {
   }
 
   const chunks: T[][] = [];
+
   for (let i = 0; i < items.length; i += size) {
     chunks.push(items.slice(i, i + size));
   }
@@ -404,21 +457,34 @@ function mapUpsertError(params: {
 }): CreateRecordErrorOptions {
   const { error, entityType, record, jobId, recordIndex } = params;
 
+  if (error instanceof UpsertRecordError) {
+    return buildError(
+      jobId,
+      recordIndex,
+      error.errorCode,
+      error.message,
+      error.field,
+      error.value,
+    );
+  }
+
   if (isPrismaKnownError(error)) {
     if (error.code === 'P2002') {
       const target = extractPrismaTarget(error.meta?.target);
+      const field = target ? mapRecordField(entityType, target) : null;
       return buildError(
         jobId,
         recordIndex,
         ValidationErrorCode.DUPLICATE_VALUE,
-        target ? `Duplicate value for ${target}` : 'Duplicate value violates unique constraint',
-        target ?? 'record',
-        target ? getRecordValue(record, target) : null,
+        field ? `Duplicate value for ${field}` : 'Duplicate value violates unique constraint',
+        field ?? 'record',
+        field ? getRecordValue(record, field) : null,
       );
     }
 
     if (error.code === 'P2003') {
-      const field = extractPrismaField(error.meta?.field_name);
+      const rawField = extractPrismaField(error.meta?.field_name);
+      const field = rawField ? mapRecordField(entityType, rawField) : null;
       return buildError(
         jobId,
         recordIndex,
@@ -470,25 +536,7 @@ function buildError(
   };
 }
 
-function sanitizeValue(value: unknown): unknown {
-  if (value === undefined || value === null) {
-    return null;
-  }
 
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.slice(0, 10);
-  }
-
-  if (typeof value === 'object') {
-    return '[object]';
-  }
-
-  return String(value);
-}
 
 function isPrismaKnownError(error: unknown): error is Prisma.PrismaClientKnownRequestError {
   return Boolean(
@@ -514,6 +562,28 @@ function extractPrismaField(field: unknown): string | null {
     return field.replace(/^\w+\./, '');
   }
   return null;
+}
+
+function mapRecordField(entityType: EntityType, field: string): string {
+  const normalized = field.replace(/^\w+\./, '');
+  const snake = toSnakeCase(normalized);
+
+  if (snake === 'tag_list') {
+    return 'tags';
+  }
+
+  if (entityType === 'articles' && snake === 'author_id') {
+    return 'author_id';
+  }
+
+  return snake;
+}
+
+function toSnakeCase(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-\s]+/g, '_')
+    .toLowerCase();
 }
 
 function inferLookupField(entityType: EntityType, record: ImportRecord): string {
