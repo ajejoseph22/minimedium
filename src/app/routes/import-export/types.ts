@@ -189,6 +189,7 @@ export enum ResourceErrorCode {
   RATE_LIMITED = 4004,
   CONCURRENT_LIMIT = 4005,
   DOWNLOAD_EXPIRED = 4006,
+  UNSUPPORTED_RESOURCE = 4007,
 }
 
 /**
@@ -251,6 +252,7 @@ export const ErrorCodeNames: Record<ImportExportErrorCode, string> = {
   [ResourceErrorCode.RATE_LIMITED]: 'RATE_LIMITED',
   [ResourceErrorCode.CONCURRENT_LIMIT]: 'CONCURRENT_LIMIT',
   [ResourceErrorCode.DOWNLOAD_EXPIRED]: 'DOWNLOAD_EXPIRED',
+  [ResourceErrorCode.UNSUPPORTED_RESOURCE]: 'UNSUPPORTED_RESOURCE',
 
   // System errors
   [SystemErrorCode.DATABASE_ERROR]: 'DATABASE_ERROR',

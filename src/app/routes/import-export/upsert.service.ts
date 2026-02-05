@@ -285,7 +285,11 @@ async function buildArticleOperations(
         description: buildDescription(record.title, record.body),
         body: record.body.trim(),
         ...(status ? { status } : {}),
-        ...(record.published_at ? { publishedAt } : {}),
+        ...(isDraft
+          ? { publishedAt: null }
+          : record.published_at
+          ? { publishedAt }
+          : {}),
         author: { connect: { id: record.author_id } },
         ...(tags.length
           ? {

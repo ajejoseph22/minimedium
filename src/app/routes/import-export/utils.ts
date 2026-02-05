@@ -1,4 +1,5 @@
 import ipaddr from 'ipaddr.js';
+import { promises as fs } from 'fs';
 
 export function isLocalHostname(host: string): boolean {
   return (
@@ -47,4 +48,13 @@ export function sanitizeValue(value: unknown): unknown {
   }
 
   return String(value);
+}
+
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }

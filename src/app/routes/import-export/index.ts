@@ -7,6 +7,7 @@
 export * from './types';
 export * from './config';
 export * from './intake.service';
+export * from './import.service';
 export * from './parsing.service';
 export * from './upsert.service';
 export * from './validation.service';
