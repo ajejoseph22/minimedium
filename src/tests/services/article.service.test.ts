@@ -25,15 +25,19 @@ describe('ArticleService', () => {
     test('should return the favorited article', async () => {
       // Given
       const slug = 'How-to-train-your-dragon';
-      const username = 'RealWorld';
 
       const mockedUserResponse = {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -44,6 +48,8 @@ describe('ArticleService', () => {
         title: 'How to train your dragon',
         description: '',
         body: '',
+        publishedAt: null,
+        status: 'draft',
         createdAt: new Date(),
         updatedAt: new Date(),
         authorId: 456,
@@ -73,7 +79,6 @@ describe('ArticleService', () => {
       // Given
       const id = 123;
       const slug = 'how-to-train-your-dragon';
-      const username = 'RealWorld';
 
       // When
       prismaMock.user.findUnique.mockResolvedValue(null);
@@ -86,15 +91,19 @@ describe('ArticleService', () => {
     test('should return the unfavorited article', async () => {
       // Given
       const slug = 'How-to-train-your-dragon';
-      const username = 'RealWorld';
 
       const mockedUserResponse = {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -105,6 +114,8 @@ describe('ArticleService', () => {
         title: 'How to train your dragon',
         description: '',
         body: '',
+        publishedAt: null,
+        status: 'draft',
         createdAt: new Date(),
         updatedAt: new Date(),
         authorId: 456,
@@ -132,7 +143,6 @@ describe('ArticleService', () => {
       // Given
       const id = 123;
       const slug = 'how-to-train-your-dragon';
-      const username = 'RealWorld';
 
       // When
       prismaMock.user.findUnique.mockResolvedValue(null);

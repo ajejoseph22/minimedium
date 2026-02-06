@@ -1,6 +1,6 @@
 import * as bcrypt from 'bcryptjs';
-import { createUser, getCurrentUser, login, updateUser } from '../../app/routes/auth/auth.service';
 import prismaMock from '../prisma-mock';
+import { createUser, getCurrentUser, login, updateUser } from '../../app/routes/auth/auth.service';
 
 describe('AuthService', () => {
   describe('createUser', () => {
@@ -17,9 +17,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -87,9 +92,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -117,9 +127,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: hashedPassword,
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -183,9 +198,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'Gerome',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: hashedPassword,
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -208,9 +228,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
@@ -237,9 +262,14 @@ describe('AuthService', () => {
         id: 123,
         username: 'RealWorld',
         email: 'realworld@me',
+        name: null,
+        role: 'user',
+        active: true,
         password: '1234',
         bio: null,
         image: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
         token: '',
         demo: false,
       };
