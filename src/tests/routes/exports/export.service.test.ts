@@ -1,12 +1,17 @@
-import prismaMock from '../prisma-mock';
-import { streamExportRecords, runExportJob } from '../../app/routes/import-export';
-import { StorageAdapter } from '../../app/storage';
+import prismaMock from '../../prisma-mock';
+import { streamExportRecords, runExportJob } from '../../../app/routes/exports/export.service';
+import { StorageAdapter } from '../../../app/storage';
 
-jest.mock('../../app/routes/import-export/config', () => ({
-  loadConfig: () => ({
+jest.mock('../../../app/routes/exports/config', () => ({
+  loadExportConfig: () => ({
     batchSize: 1,
     exportStreamMaxLimit: 2,
+    workerConcurrency: 4,
     fileRetentionHours: 24,
+    exportStoragePath: './exports',
+    exportRateLimitPerHour: 20,
+    exportConcurrentLimitUser: 5,
+    exportConcurrentLimitGlobal: 20,
   }),
 }));
 

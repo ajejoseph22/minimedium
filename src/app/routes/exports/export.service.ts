@@ -3,7 +3,7 @@ import path from 'path';
 import { PassThrough } from 'stream';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { createExportStorageAdapter, StorageAdapter } from '../../storage';
-import { loadConfig } from './config';
+import { loadExportConfig } from './config';
 import {
   EntityType,
   ExportRecord,
@@ -12,7 +12,7 @@ import {
   JobStatus,
   ResourceErrorCode,
   SystemErrorCode,
-} from './types';
+} from '../shared/import-export/types';
 import prismaClient from '../../../prisma/prisma-client';
 
 
@@ -83,7 +83,7 @@ class ExportServiceError extends Error {
 
 export async function* streamExportRecords(options: StreamExportOptions): AsyncGenerator<ExportRecord> {
   const prisma = options.prisma ?? prismaClient;
-  const config = loadConfig();
+  const config = loadExportConfig();
   const limit = options.limit ?? config.exportStreamMaxLimit;
   const batchSize = options.batchSize ?? config.batchSize;
 
@@ -127,7 +127,7 @@ export async function runExportJob(
   const now = options.now ?? (() => new Date());
   const cancelCheckInterval =
     options.cancelCheckInterval ?? DEFAULT_CANCEL_CHECK_INTERVAL;
-  const config = loadConfig();
+  const config = loadExportConfig();
 
   const job = await prisma.exportJob.findUnique({ where: { id: jobId } });
   if (!job) {
@@ -192,7 +192,7 @@ export async function runExportJob(
       first = false;
 
       if (cancelCheckInterval && processedRecords % cancelCheckInterval === 0) {
-        if (await jobIsCancelled(prisma, jobId)) {
+        if (await isJobCancelled(prisma, jobId)) {
           cancelled = true;
           break;
         }
@@ -292,7 +292,7 @@ function buildExpiry(now: () => Date, retentionHours: number): Date | null {
   return new Date(now().getTime() + retentionHours * 60 * 60 * 1000);
 }
 
-async function jobIsCancelled(
+async function isJobCancelled(
   prisma: PrismaClient,
   jobId: string
 ): Promise<boolean> {

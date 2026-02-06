@@ -1,7 +1,7 @@
-import prismaClient from '../../../prisma/prisma-client';
-import { CreateRecordErrorOptions, ValidationErrorCode } from './types';
 import type { PrismaClient } from '@prisma/client';
-import { sanitizeValue } from './utils';
+import prismaClient from '../../../../prisma/prisma-client';
+import { CreateRecordErrorOptions, ValidationErrorCode } from '../../shared/import-export/types';
+import { sanitizeValue } from '../../shared/import-export/utils';
 
 export interface ValidationCache {
   seenEmails: Set<string>;

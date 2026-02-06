@@ -1,6 +1,6 @@
-import prismaMock from '../prisma-mock';
-import { generateImportErrorReport } from '../../app/routes/import-export';
-import { StorageAdapter } from '../../app/storage';
+import prismaMock from '../../prisma-mock';
+import { generateImportErrorReport } from '../../../app/routes/imports/error-report.service';
+import { StorageAdapter } from '../../../app/storage';
 
 const prisma = prismaMock as unknown as any;
 

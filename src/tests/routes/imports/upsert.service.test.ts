@@ -1,6 +1,6 @@
-import prismaMock from '../prisma-mock';
-import { upsertImportRecords } from '../../app/routes/import-export';
-import { ValidationErrorCode } from '../../app/routes/import-export';
+import prismaMock from '../../prisma-mock';
+import { upsertImportRecords } from '../../../app/routes/imports/upsert.service';
+import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
 
 
 jest.mock('bcryptjs', () => ({

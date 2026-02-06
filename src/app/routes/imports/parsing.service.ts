@@ -2,7 +2,7 @@ import { Readable } from 'stream';
 import readline from 'readline';
 import { parser as jsonParser } from 'stream-json';
 import { streamArray } from 'stream-json/streamers/StreamArray';
-import { FileErrorCode, ImportExportErrorCode, ProcessingErrorCode } from './types';
+import { FileErrorCode, ImportExportErrorCode, ProcessingErrorCode } from '../shared/import-export/types';
 
 export interface ParseOptions {
   maxRecords: number;

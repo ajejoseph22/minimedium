@@ -460,33 +460,7 @@ export type ExportRecord = UserExportRecord | ArticleExportRecord | CommentExpor
 // Configuration Types
 // =============================================================================
 
-/**
- * Import/export feature configuration
- */
-export interface ImportExportConfig {
-  // File handling
-  maxFileSize: number; // bytes
-  maxRecords: number;
-  batchSize: number;
-  allowedHosts: string[];
-
-  // Export
-  fileRetentionHours: number;
-  exportStoragePath: string;
-  errorReportStoragePath: string;
-  importStoragePath: string;
-  exportStreamMaxLimit: number;
-
-  // Rate limits
-  importRateLimitPerHour: number;
-  exportRateLimitPerHour: number;
-
-  // Concurrency
-  importConcurrentLimitUser: number;
-  importConcurrentLimitGlobal: number;
-  exportConcurrentLimitUser: number;
-  exportConcurrentLimitGlobal: number;
-
-  // Worker
+export interface SharedImportExportConfig {
   workerConcurrency: number;
 }
+

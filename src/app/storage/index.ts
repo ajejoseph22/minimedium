@@ -1,19 +1,20 @@
-import { loadConfig } from '../routes/import-export';
+import { loadImportConfig } from '../routes/imports/config';
+import { loadExportConfig } from '../routes/exports/config';
 import { LocalStorage } from './local-storage';
 import { StorageAdapter } from './storage';
 
 export function createExportStorageAdapter(): StorageAdapter {
-  const { exportStoragePath } = loadConfig();
+  const { exportStoragePath } = loadExportConfig();
   return new LocalStorage(exportStoragePath);
 }
 
 export function createErrorReportStorageAdapter(): StorageAdapter {
-  const { errorReportStoragePath } = loadConfig();
+  const { errorReportStoragePath } = loadImportConfig();
   return new LocalStorage(errorReportStoragePath);
 }
 
 export function createImportStorageAdapter(): StorageAdapter {
-  const { importStoragePath } = loadConfig();
+  const { importStoragePath } = loadImportConfig();
   return new LocalStorage(importStoragePath);
 }
 

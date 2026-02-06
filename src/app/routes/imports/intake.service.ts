@@ -7,9 +7,9 @@ import path from 'path';
 import { Readable, Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { createImportStorageAdapter } from '../../storage';
-import { loadConfig } from './config';
-import { FileErrorCode, ImportExportErrorCode } from './types';
-import { isLocalHostname, isPrivateIp } from './utils';
+import { loadImportConfig } from './config';
+import { FileErrorCode, ImportExportErrorCode } from '../shared/import-export/types';
+import { isLocalHostname, isPrivateIp } from '../shared/import-export/utils';
 
 const DEFAULT_URL_TIMEOUT_MS = 30000;
 const ALLOWED_CONTENT_TYPES = new Set([
@@ -21,7 +21,7 @@ const ALLOWED_CONTENT_TYPES = new Set([
   'text/json',
 ]);
 
-const config = loadConfig();
+const config = loadImportConfig();
 
 export class ImportExportError extends Error {
   constructor(

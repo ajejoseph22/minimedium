@@ -4,12 +4,12 @@ import { Readable } from 'stream';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import prismaClient from '../../../prisma/prisma-client';
 import { createImportStorageAdapter } from '../../storage';
-import { loadConfig } from './config';
+import { loadImportConfig } from './config';
 import { ImportExportError } from './intake.service';
 import { ImportExportParseError, parseJsonArrayStream, parseNdjsonStream } from './parsing.service';
 import { upsertImportRecords, IndexedImportRecord } from './upsert.service';
-import { validateImportRecord } from './validation.service';
-import { createValidationCache } from './validation.validators';
+import { validateImportRecord } from './validation/validation.service';
+import { createValidationCache } from './validation/validation.validators';
 import { generateImportErrorReport } from './error-report.service';
 import {
   CreateRecordErrorOptions,
@@ -22,8 +22,8 @@ import {
   JobStatus,
   ResourceErrorCode,
   SystemErrorCode,
-} from './types';
-import { pathExists } from './utils';
+} from '../shared/import-export/types';
+import { pathExists } from '../shared/import-export/utils';
 
 export interface RunImportJobOptions {
   prisma?: PrismaClient;
@@ -62,7 +62,7 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
   const prisma = options.prisma ?? prismaClient;
   const now = options.now ?? (() => new Date());
   const cancelCheckInterval = options.cancelCheckInterval ?? DEFAULT_CANCEL_CHECK_INTERVAL;
-  const config = loadConfig();
+  const config = loadImportConfig();
 
   const job = await prisma.importJob.findUnique({ where: { id: jobId } });
   if (!job) {

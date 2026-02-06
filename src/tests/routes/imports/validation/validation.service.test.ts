@@ -1,11 +1,11 @@
-import prismaMock from '../prisma-mock';
+import prismaMock from '../../../prisma-mock';
 import {
   validateArticleRecord,
   validateCommentRecord,
   validateUserRecord,
-} from '../../app/routes/import-export';
-import { createValidationCache } from '../../app/routes/import-export/validation.validators';
-import { ValidationErrorCode } from '../../app/routes/import-export';
+} from '../../../../app/routes/imports/validation/validation.service';
+import { createValidationCache } from '../../../../app/routes/imports/validation/validation.validators';
+import { ValidationErrorCode } from '../../../../app/routes/shared/import-export/types';
 
 const prisma: any = prismaMock;
 

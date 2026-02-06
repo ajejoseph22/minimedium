@@ -3,7 +3,7 @@ import path from 'path';
 import type { PrismaClient } from '@prisma/client';
 import prismaClient from '../../../prisma/prisma-client';
 import { createErrorReportStorageAdapter, StorageAdapter } from '../../storage';
-import { FileFormat } from './types';
+import { FileFormat } from '../shared/import-export/types';
 
 export interface GenerateImportErrorReportOptions {
   prisma?: PrismaClient;

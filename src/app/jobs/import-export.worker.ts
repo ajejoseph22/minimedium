@@ -1,5 +1,5 @@
 import { Job, Worker } from 'bullmq';
-import { loadConfig } from '../routes/import-export';
+import { loadSharedImportExportConfig } from '../routes/shared/import-export/config';
 import { ImportExportJobPayload, importExportConnection } from './import-export.queue';
 
 export interface ImportExportJobHandlers {
@@ -8,7 +8,7 @@ export interface ImportExportJobHandlers {
 }
 
 export function createImportExportWorker(handlers: ImportExportJobHandlers) {
-  const { workerConcurrency } = loadConfig();
+  const { workerConcurrency } = loadSharedImportExportConfig();
 
   return new Worker<ImportExportJobPayload>(
     'import-export',

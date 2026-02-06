@@ -6,7 +6,7 @@ import {
   ImportRecord,
   UserImportRecord,
   ValidationErrorCode,
-} from './types';
+} from '../../shared/import-export/types';
 import type { PrismaClient } from '@prisma/client';
 import {
   buildArticleSchema,

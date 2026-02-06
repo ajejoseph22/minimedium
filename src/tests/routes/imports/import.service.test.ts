@@ -1,16 +1,24 @@
 import { Readable } from 'stream';
-import prismaMock from '../prisma-mock';
-import { runImportJob } from '../../app/routes/import-export';
-import { ValidationErrorCode } from '../../app/routes/import-export';
+import prismaMock from '../../prisma-mock';
+import { runImportJob } from '../../../app/routes/imports/import.service';
+import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
 
-jest.mock('../../app/routes/import-export/config', () => ({
-  loadConfig: () => ({
+jest.mock('../../../app/routes/imports/config', () => ({
+  loadImportConfig: () => ({
     maxRecords: 100,
     batchSize: 1,
+    workerConcurrency: 4,
+    maxFileSize: 1024 * 1024 * 1024,
+    allowedHosts: [],
+    errorReportStoragePath: './import-errors',
+    importStoragePath: './imports',
+    importRateLimitPerHour: 10,
+    importConcurrentLimitUser: 2,
+    importConcurrentLimitGlobal: 10,
   }),
 }));
 
-jest.mock('../../app/storage', () => ({
+jest.mock('../../../app/storage', () => ({
   createImportStorageAdapter: () => ({
     getLocalPath: (input: string) => input,
   }),
@@ -23,8 +31,8 @@ jest.mock('fs', () => ({
   },
 }));
 
-jest.mock('../../app/routes/import-export/parsing.service', () => {
-  const actual = jest.requireActual('../../app/routes/import-export/parsing.service');
+jest.mock('../../../app/routes/imports/parsing.service', () => {
+  const actual = jest.requireActual('../../../app/routes/imports/parsing.service');
   return {
     ...actual,
     parseJsonArrayStream: jest.fn(),
@@ -32,15 +40,15 @@ jest.mock('../../app/routes/import-export/parsing.service', () => {
   };
 });
 
-jest.mock('../../app/routes/import-export/validation.service', () => ({
+jest.mock('../../../app/routes/imports/validation/validation.service', () => ({
   validateImportRecord: jest.fn(),
 }));
 
-jest.mock('../../app/routes/import-export/upsert.service', () => ({
+jest.mock('../../../app/routes/imports/upsert.service', () => ({
   upsertImportRecords: jest.fn(),
 }));
 
-jest.mock('../../app/routes/import-export/error-report.service', () => ({
+jest.mock('../../../app/routes/imports/error-report.service', () => ({
   generateImportErrorReport: jest.fn().mockResolvedValue({
     key: 'import-errors/job-1.ndjson',
     location: '/tmp/import-errors/job-1.ndjson',
@@ -50,9 +58,9 @@ jest.mock('../../app/routes/import-export/error-report.service', () => ({
   }),
 }));
 
-import { parseJsonArrayStream } from '../../app/routes/import-export';
-import { validateImportRecord } from '../../app/routes/import-export';
-import { upsertImportRecords } from '../../app/routes/import-export';
+import { parseJsonArrayStream } from '../../../app/routes/imports/parsing.service';
+import { validateImportRecord } from '../../../app/routes/imports/validation/validation.service';
+import { upsertImportRecords } from '../../../app/routes/imports/upsert.service';
 
 const prisma = prismaMock as unknown as any;
 

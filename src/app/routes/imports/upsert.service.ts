@@ -11,11 +11,11 @@ import {
   ImportRecord,
   ProcessingErrorCode,
   ValidationErrorCode,
-} from './types';
-import { loadConfig } from './config';
-import { sanitizeValue } from './utils';
+} from '../shared/import-export/types';
+import { loadImportConfig } from './config';
+import { sanitizeValue } from '../shared/import-export/utils';
 
-const config = loadConfig();
+const config = loadImportConfig();
 
 export interface IndexedImportRecord<TRecord extends ImportRecord = ImportRecord> {
   record: TRecord;
