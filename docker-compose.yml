@@ -13,6 +13,12 @@ services:
       - "5432:5432"
     volumes:
       - minimedium_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d minimedium"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7
     container_name: minimedium-redis
@@ -21,7 +27,68 @@ services:
       - "6379:6379"
     volumes:
       - minimedium_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: node:lts
+    container_name: minimedium-api
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/minimedium?schema=public
+      REDIS_URL: redis://redis:6379
+      NX_DAEMON: "false"
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "3000:3000"
+    command: >-
+      sh -c "npm ci &&
+      npx prisma generate &&
+      npx prisma migrate deploy &&
+      npm run start:api"
+    volumes:
+      - ./:/workspace
+      - api_node_modules:/workspace/node_modules
+
+  worker:
+    image: node:lts
+    container_name: minimedium-worker
+    working_dir: /workspace
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/minimedium?schema=public
+      REDIS_URL: redis://redis:6379
+      NX_DAEMON: "false"
+      CHOKIDAR_USEPOLLING: "true"
+    command: >-
+      sh -c "npm ci &&
+      npx prisma generate &&
+      npm run start:worker"
+    volumes:
+      - ./:/workspace
+      - worker_node_modules:/workspace/node_modules
 
 volumes:
   minimedium_postgres_data:
   minimedium_redis_data:
+  api_node_modules:
+  worker_node_modules:

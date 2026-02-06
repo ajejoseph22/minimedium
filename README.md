@@ -27,7 +27,18 @@ Here are the required ones:
 ```
 DATABASE_URL=
 JWT_SECRET=
+REDIS_URL=redis://localhost:6379
 NODE_ENV=production
+```
+
+Import/export worker settings (optional overrides):
+
+```
+JOB_WORKER_CONCURRENCY=4
+IMPORT_STORAGE_PATH=./imports
+EXPORT_STORAGE_PATH=./exports
+ERROR_REPORT_STORAGE_PATH=./import-errors
+EXPORT_DOWNLOAD_BASE_URL=http://localhost:3000
 ```
 
 ### Generate your Prisma client
@@ -48,10 +59,34 @@ npx prisma migrate deploy
 
 ### Run the project
 
-Run the following command to run the project:
+Run API only:
 
 ```shell
-npx nx serve api
+npm run start:api
+```
+
+Run worker only:
+
+```shell
+npm run start:worker
+```
+
+Run API + worker together (local processes):
+
+```shell
+npm run start:all
+```
+
+Run full local stack with Docker Compose (postgres + redis + api + worker):
+
+```shell
+npm run dev:up
+```
+
+Stop full local stack:
+
+```shell
+npm run dev:down
 ```
 
 ### Seed the database

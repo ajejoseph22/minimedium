@@ -4,6 +4,11 @@
   "license": "MIT",
   "scripts": {
     "start": "nx serve",
+    "start:api": "nx serve api",
+    "start:worker": "nx run api:serve-worker",
+    "start:all": "nx run api:serve-all",
+    "dev:up": "docker compose up -d",
+    "dev:down": "docker compose down",
     "build": "nx build",
     "test": "nx test"
   },
