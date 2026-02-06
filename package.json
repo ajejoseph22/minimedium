@@ -3,12 +3,17 @@
   "version": "0.0.0",
   "license": "MIT",
   "scripts": {
-    "start": "nx serve",
     "start:api": "nx serve api",
     "start:worker": "nx run api:serve-worker",
     "start:all": "nx run api:serve-all",
-    "dev:up": "docker compose up -d",
-    "dev:down": "docker compose down",
+    "dev:api": "nodemon --legacy-watch --watch src --ext ts,json --exec \"tsx src/main.ts\"",
+    "dev:worker": "nodemon --legacy-watch --watch src --ext ts,json --exec \"tsx src/worker.ts\"",
+    "run:api": "tsx src/main.ts",
+    "run:worker": "tsx src/worker.ts",
+    "dev:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up",
+    "dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "prod:up": "docker compose -f docker-compose.yml up -d",
+    "prod:down": "docker compose -f docker-compose.yml down",
     "build": "nx build",
     "test": "nx test"
   },
@@ -59,11 +64,13 @@
     "jest": "^29.4.1",
     "jest-environment-node": "^29.4.1",
     "jest-mock-extended": "^3.0.5",
+    "nodemon": "^3.1.11",
     "nx": "17.2.6",
     "prettier": "^2.6.2",
     "prisma": "^4.16.1",
     "ts-jest": "^29.1.0",
     "ts-node": "10.9.1",
+    "tsx": "^4.21.0",
     "typescript": "~5.2.2"
   }
 }

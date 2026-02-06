@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
@@ -34,7 +32,7 @@ services:
       retries: 10
 
   api:
-    image: node:lts
+    image: node:lts-slim
     container_name: minimedium-api
     working_dir: /workspace
     restart: unless-stopped
@@ -44,26 +42,29 @@ services:
       redis:
         condition: service_healthy
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/minimedium?schema=public
       REDIS_URL: redis://redis:6379
+      EXPORT_STORAGE_PATH: /workspace/data/exports
+      IMPORT_STORAGE_PATH: /workspace/data/imports
+      ERROR_REPORT_STORAGE_PATH: /workspace/data/import-errors
       NX_DAEMON: "false"
-      CHOKIDAR_USEPOLLING: "true"
     ports:
       - "3000:3000"
     command: >-
       sh -c "npm ci &&
       npx prisma generate &&
       npx prisma migrate deploy &&
-      npm run start:api"
+      npm run run:api"
     volumes:
       - ./:/workspace
+      - ./data:/workspace/data
       - api_node_modules:/workspace/node_modules
 
   worker:
-    image: node:lts
+    image: node:lts-slim
     container_name: minimedium-worker
     working_dir: /workspace
     restart: unless-stopped
@@ -73,18 +74,21 @@ services:
       redis:
         condition: service_healthy
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/minimedium?schema=public
       REDIS_URL: redis://redis:6379
+      EXPORT_STORAGE_PATH: /workspace/data/exports
+      IMPORT_STORAGE_PATH: /workspace/data/imports
+      ERROR_REPORT_STORAGE_PATH: /workspace/data/import-errors
       NX_DAEMON: "false"
-      CHOKIDAR_USEPOLLING: "true"
     command: >-
       sh -c "npm ci &&
       npx prisma generate &&
-      npm run start:worker"
+      npm run run:worker"
     volumes:
       - ./:/workspace
+      - ./data:/workspace/data
       - worker_node_modules:/workspace/node_modules
 
 volumes:

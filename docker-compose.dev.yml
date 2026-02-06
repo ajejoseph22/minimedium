@@ -1,0 +1,21 @@
+services:
+  api:
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
+    command: >-
+      sh -c "npm ci &&
+      npx prisma generate &&
+      npx prisma migrate deploy &&
+      npm run dev:api"
+
+  worker:
+    environment:
+      NODE_ENV: development
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
+    command: >-
+      sh -c "npm ci &&
+      npx prisma generate &&
+      npm run dev:worker"
