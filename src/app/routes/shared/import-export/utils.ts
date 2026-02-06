@@ -200,6 +200,7 @@ export function normalizeJsonValue(
   if (!isObject(value) && !Array.isArray(value)) {
     return null;
   }
+
   return value as Prisma.InputJsonValue;
 }
 

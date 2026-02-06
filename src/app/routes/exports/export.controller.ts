@@ -83,13 +83,16 @@ router.post('/v1/exports', auth.required, async (req: AuthenticatedRequest, res:
       }
     }
 
+    const normalizedFilters = normalizeJsonValue(payload.filters);
+    const normalizedFields = normalizeJsonValue(payload.fields);
+
     const created = await prismaClient.exportJob.create({
       data: {
         status: 'queued',
         resource,
         format,
-        filters: normalizeJsonValue(payload.filters),
-        fields: normalizeJsonValue(payload.fields),
+        ...(normalizedFilters !== null ? { filters: normalizedFilters } : {}),
+        ...(normalizedFields !== null ? { fields: normalizedFields } : {}),
         idempotencyKey,
         createdById,
         requestHash: null,

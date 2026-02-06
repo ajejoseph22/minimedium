@@ -232,7 +232,7 @@ describe('runExportJob', () => {
           processedRecords: 1,
           totalRecords: 1,
           downloadUrl: '/api/v1/exports/job-1/download',
-          outputLocation: expect.stringContaining('/tmp/exports/job-1.ndjson'),
+          outputLocation: expect.stringContaining('/tmp/job-1.ndjson'),
           fileSize: expect.any(Number),
           expiresAt: expect.any(Date),
         }),
@@ -354,7 +354,7 @@ describe('runExportJob', () => {
       processedRecords: 1,
       fileSize: null,
     });
-    expect(deleteFile).toHaveBeenCalledWith('exports/job-4.ndjson');
+    expect(deleteFile).toHaveBeenCalledWith('job-4.ndjson');
     expect(prisma.exportJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'job-4' },
@@ -390,7 +390,7 @@ describe('runExportJob', () => {
       })
     ).rejects.toThrow('database exploded');
 
-    expect(deleteFile).toHaveBeenCalledWith('exports/job-5.ndjson');
+    expect(deleteFile).toHaveBeenCalledWith('job-5.ndjson');
     expect(prisma.exportJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'job-5' },

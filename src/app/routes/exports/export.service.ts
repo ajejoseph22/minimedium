@@ -1,5 +1,4 @@
 import { once } from 'events';
-import path from 'path';
 import { PassThrough } from 'stream';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { createExportStorageAdapter, StorageAdapter } from '../../storage';
@@ -276,7 +275,7 @@ function normalizeFormat(format: string | null): FileFormat {
 
 function buildOutputKey(jobId: string, format: FileFormat): string {
   const ext = format === 'json' ? 'json' : 'ndjson';
-  return path.posix.join('exports', `${jobId}.${ext}`);
+  return `${jobId}.${ext}`;
 }
 
 function buildDownloadUrl(jobId: string): string {
