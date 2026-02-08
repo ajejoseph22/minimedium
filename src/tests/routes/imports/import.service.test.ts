@@ -2,7 +2,7 @@ import { Readable } from 'stream';
 import prismaMock from '../../prisma-mock';
 import { runImportJob } from '../../../app/routes/imports/import.service';
 import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
-import { logJobLifecycleEvent } from '../../../app/routes/shared/import-export/observability';
+import { logJobLifecycleEvent } from '../../../app/jobs/observability';
 
 jest.mock('fs', () => ({
   createReadStream: jest.fn(() => new Readable({ read() { this.push(null); } })),
@@ -38,7 +38,7 @@ jest.mock('../../../app/routes/imports/error-report.service', () => ({
   }),
 }));
 
-jest.mock('../../../app/routes/shared/import-export/observability', () => ({
+jest.mock('../../../app/jobs/observability', () => ({
   logJobLifecycleEvent: jest.fn(),
 }));
 

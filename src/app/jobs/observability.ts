@@ -1,12 +1,13 @@
-import { round } from './utils';
+import { createLogger } from '../logger';
+import { round } from '../routes/shared/import-export/utils';
 
 export type JobKind = 'import' | 'export';
 export type LogLevel = 'info' | 'warn' | 'error';
 
 interface StructuredLogger {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
+  info: (payload: unknown) => void;
+  warn: (payload: unknown) => void;
+  error: (payload: unknown) => void;
 }
 
 export interface JobMetrics {
@@ -34,6 +35,7 @@ export interface JobLogEntry {
 }
 
 const FALLBACK_DURATION_MS = 1;
+const lifecycleLogger = createLogger({ component: 'job-lifecycle' });
 
 function computeJobMetrics(input: {
   startedAt: Date;
@@ -56,7 +58,7 @@ function computeJobMetrics(input: {
 
 export function logJobLifecycleEvent(
   entry: JobLogEntry,
-  logger: StructuredLogger = console,
+  logger: StructuredLogger = lifecycleLogger,
 ): void {
   const { jobStartedAt, ...rest } = entry;
   const metrics = jobStartedAt
@@ -74,16 +76,15 @@ export function logJobLifecycleEvent(
     ...(metrics ? { metrics } : {}),
   };
 
-  const line = JSON.stringify(payload);
   if (entry.level === 'error') {
-    logger.error(line);
+    logger.error(payload);
     return;
   }
 
   if (entry.level === 'warn') {
-    logger.warn(line);
+    logger.warn(payload);
     return;
   }
 
-  logger.info(line);
+  logger.info(payload);
 }

@@ -25,7 +25,7 @@ import {
 } from '../shared/import-export/types';
 import {
   logJobLifecycleEvent,
-} from '../shared/import-export/observability';
+} from '../../jobs/observability';
 import { pathExists } from '../shared/import-export/utils';
 
 export interface RunImportJobOptions {

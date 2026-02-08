@@ -1,27 +1,57 @@
-import prismaMock from '../prisma-mock';
+import prisma from '../../prisma/prisma-client';
 import { followUser, getProfile, unfollowUser } from '../../app/routes/profile/profile.service';
 
+jest.mock('../../prisma/prisma-client', () => ({
+  __esModule: true,
+  default: {
+    user: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+  },
+}));
+
 describe('ProfileService', () => {
+  const createdAt = new Date('2026-02-01T00:00:00.000Z');
+  const updatedAt = new Date('2026-02-02T00:00:00.000Z');
+  const prismaMock = prisma as unknown as {
+    user: {
+      findUnique: jest.Mock;
+      update: jest.Mock;
+    };
+  };
+
+  const createMockUser = (overrides = {}) => ({
+    id: 123,
+    username: 'RealWorld',
+    email: 'realworld@me',
+    name: null,
+    role: 'user',
+    active: true,
+    password: '1234',
+    bio: null,
+    image: null,
+    demo: false,
+    createdAt,
+    updatedAt,
+    followedBy: [],
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    prismaMock.user.findUnique.mockReset();
+    prismaMock.user.update.mockReset();
+  });
+
   describe('getProfile', () => {
     test('should return a following property', async () => {
       // Given
       const username = 'RealWorld';
       const id = 123;
 
-      const mockedResponse = {
-        id: 123,
-        username: 'RealWorld',
-        email: 'realworld@me',
-        password: '1234',
-        bio: null,
-        image: null,
-        token: '',
-        demo: false,
-        followedBy: [],
-      };
+      const mockedResponse = createMockUser();
 
       // When
-      // @ts-ignore
       prismaMock.user.findUnique.mockResolvedValue(mockedResponse);
 
       // Then
@@ -42,34 +72,16 @@ describe('ProfileService', () => {
   });
 
   describe('followUser', () => {
-    test('shoud return a following property', async () => {
+    test('should return a following property', async () => {
       // Given
       const usernamePayload = 'AnotherUser';
       const id = 123;
 
-      const mockedAuthUser = {
-        id: 123,
-        username: 'RealWorld',
-        email: 'realworld@me',
-        password: '1234',
-        bio: null,
-        image: null,
-        token: '',
-        demo: false,
-        followedBy: [],
-      };
-
-      const mockedResponse = {
-        id: 123,
+      const mockedAuthUser = createMockUser();
+      const mockedResponse = createMockUser({
         username: 'AnotherUser',
         email: 'another@me',
-        password: '1234',
-        bio: null,
-        image: null,
-        token: '',
-        demo: false,
-        followedBy: [],
-      };
+      });
 
       // When
       prismaMock.user.findUnique.mockResolvedValue(mockedAuthUser);
@@ -79,7 +91,7 @@ describe('ProfileService', () => {
       await expect(followUser(usernamePayload, id)).resolves.toHaveProperty('following');
     });
 
-    test('shoud throw an error if no user is found', async () => {
+    test('should throw an error if no user is found', async () => {
       // Given
       const usernamePayload = 'AnotherUser';
       const id = 123;
@@ -93,34 +105,16 @@ describe('ProfileService', () => {
   });
 
   describe('unfollowUser', () => {
-    test('shoud return a following property', async () => {
+    test('should return a following property', async () => {
       // Given
       const usernamePayload = 'AnotherUser';
       const id = 123;
 
-      const mockedAuthUser = {
-        id: 123,
-        username: 'RealWorld',
-        email: 'realworld@me',
-        password: '1234',
-        bio: null,
-        image: null,
-        token: '',
-        demo: false,
-        followedBy: [],
-      };
-
-      const mockedResponse = {
-        id: 123,
+      const mockedAuthUser = createMockUser();
+      const mockedResponse = createMockUser({
         username: 'AnotherUser',
         email: 'another@me',
-        password: '1234',
-        bio: null,
-        image: null,
-        token: '',
-        demo: false,
-        followedBy: [],
-      };
+      });
 
       // When
       prismaMock.user.findUnique.mockResolvedValue(mockedAuthUser);
@@ -130,7 +124,7 @@ describe('ProfileService', () => {
       await expect(unfollowUser(usernamePayload, id)).resolves.toHaveProperty('following');
     });
 
-    test('shoud throw an error if no user is found', async () => {
+    test('should throw an error if no user is found', async () => {
       // Given
       const usernamePayload = 'AnotherUser';
       const id = 123;

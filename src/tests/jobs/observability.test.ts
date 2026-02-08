@@ -1,4 +1,4 @@
-import { logJobLifecycleEvent } from '../../../../app/routes/shared/import-export/observability';
+import { logJobLifecycleEvent } from '../../app/jobs/observability';
 
 function createLogger() {
   return {
@@ -9,13 +9,13 @@ function createLogger() {
 }
 
 function parsePayload(mockCallArg: unknown): Record<string, unknown> {
-  if (typeof mockCallArg !== 'string') {
-    throw new Error('Expected logger call argument to be string');
+  if (!mockCallArg || typeof mockCallArg !== 'object') {
+    throw new Error('Expected logger call argument to be object');
   }
-  return JSON.parse(mockCallArg) as Record<string, unknown>;
+  return mockCallArg as Record<string, unknown>;
 }
 
-describe('observability', () => {
+describe('logJobLifecycleEvent', () => {
   it('should emit started event without metrics when jobStartedAt is absent', () => {
     const logger = createLogger();
     const timestamp = new Date('2026-02-08T15:00:00.000Z');
@@ -35,7 +35,7 @@ describe('observability', () => {
           errorCount: 0,
         },
       },
-      logger,
+      logger
     );
 
     expect(logger.info).toHaveBeenCalledTimes(1);
@@ -80,7 +80,7 @@ describe('observability', () => {
           errorCount: 50,
         },
       },
-      logger,
+      logger
     );
 
     expect(logger.info).toHaveBeenCalledTimes(1);
@@ -128,7 +128,7 @@ describe('observability', () => {
         },
         level: 'warn',
       },
-      warnLogger,
+      warnLogger
     );
 
     logJobLifecycleEvent(
@@ -148,7 +148,7 @@ describe('observability', () => {
         },
         level: 'error',
       },
-      errorLogger,
+      errorLogger
     );
 
     expect(warnLogger.warn).toHaveBeenCalledTimes(1);

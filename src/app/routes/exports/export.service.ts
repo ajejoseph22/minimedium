@@ -14,7 +14,7 @@ import {
 } from '../shared/import-export/types';
 import {
   logJobLifecycleEvent,
-} from '../shared/import-export/observability';
+} from '../../jobs/observability';
 import prismaClient from '../../../prisma/prisma-client';
 
 

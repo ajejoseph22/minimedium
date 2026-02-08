@@ -1,6 +1,6 @@
 import prismaMock from '../../prisma-mock';
 import { streamExportRecords, runExportJob } from '../../../app/routes/exports/export.service';
-import { logJobLifecycleEvent } from '../../../app/routes/shared/import-export/observability';
+import { logJobLifecycleEvent } from '../../../app/jobs/observability';
 import { createMemoryStorageAdapter } from '../../helpers/memory-storage';
 
 jest.mock('../../../app/routes/exports/config', () => ({
@@ -16,7 +16,7 @@ jest.mock('../../../app/routes/exports/config', () => ({
   }),
 }));
 
-jest.mock('../../../app/routes/shared/import-export/observability', () => ({
+jest.mock('../../../app/jobs/observability', () => ({
   logJobLifecycleEvent: jest.fn(),
 }));
 
