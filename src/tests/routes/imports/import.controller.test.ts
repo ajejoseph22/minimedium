@@ -7,7 +7,7 @@ import { createTestResponse } from '../../helpers/test-response';
 
 jest.mock('../../../app/routes/auth/auth', () => ({
   __esModule: true,
-  default: { required: (_req: any, _res: any, next: any) => next() },
+  default: { required: (_req, _res, next) => next() },
 }));
 
 jest.mock('../../../app/jobs/import-export.queue', () => ({
@@ -24,7 +24,7 @@ jest.mock('../../../app/routes/imports/intake.service', () => ({
 jest.mock('fs', () => ({
   createReadStream: jest.fn(() => ({
     on: jest.fn().mockReturnThis(),
-    pipe: jest.fn((res: any) => {
+    pipe: jest.fn((res) => {
       res.write('{"recordIndex":3,"message":"user_id does not exist"}\n');
       res.end();
       return res;
@@ -32,7 +32,7 @@ jest.mock('fs', () => ({
   })),
 }));
 
-const prisma = prismaMock as unknown as any;
+const prisma: any = prismaMock;
 
 type RunRouteOptions = {
   method: string;
@@ -48,7 +48,7 @@ async function runRoute(options: RunRouteOptions) {
   const lowerHeaders = Object.fromEntries(
     Object.entries(options.headers ?? {}).map(([key, value]) => [key.toLowerCase(), value]),
   );
-  const req: any = {
+  const req = {
     method: options.method,
     url: options.url,
     query: options.query ?? {},
@@ -63,7 +63,7 @@ async function runRoute(options: RunRouteOptions) {
   };
 
   const { res, done, getJsonBody, getTextBody } = createTestResponse();
-  let nextError: any = null;
+  let nextError = null;
   const next = (error?: unknown) => {
     if (error) {
       nextError = error;
@@ -72,7 +72,7 @@ async function runRoute(options: RunRouteOptions) {
     done.then(() => undefined).catch(() => undefined);
   };
 
-  (importController as unknown as (req: any, res: any, next: (error?: unknown) => void) => void)(req, res, next);
+  (importController as unknown as (req, res, next: (error?: unknown) => void) => void)(req, res, next);
 
   await Promise.race([done, new Promise<void>((resolve) => setImmediate(resolve))]);
 
@@ -130,7 +130,7 @@ describe('Import Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(202);
-      expect((result.body as any).importJob.id).toBe('imp-1');
+      expect(result.body.importJob.id).toBe('imp-1');
       expect(enqueueImportJob).toHaveBeenCalledWith({
         jobId: 'imp-1',
         resource: 'articles',
@@ -168,7 +168,7 @@ describe('Import Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(200);
-      expect((result.body as any).importJob.id).toBe('imp-existing');
+      expect(result.body.importJob.id).toBe('imp-existing');
       expect(enqueueImportJob).not.toHaveBeenCalled();
     });
 
@@ -219,7 +219,7 @@ describe('Import Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(200);
-      const body = result.body as any;
+      const body = result.body;
       expect(body.importJob.id).toBe('imp-2');
       expect(body.errorsPreview).toHaveLength(1);
       expect(body.errorsPreviewCount).toBe(1);

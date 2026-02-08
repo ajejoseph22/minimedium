@@ -1,19 +1,25 @@
-export interface TestResponseHarness {
+export function createTestResponse(): {
   res: any;
   done: Promise<void>;
-  getJsonBody: () => unknown;
+  getJsonBody: () => any;
   getTextBody: () => string;
-}
-
-export function createTestResponse(): TestResponseHarness {
-  let resolveDone: (() => void) | null = null;
+} {
+  let resolveDone = () => undefined;
+  let isDone = false;
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
+  const complete = () => {
+    if (isDone) {
+      return;
+    }
+    isDone = true;
+    resolveDone();
+  };
   let jsonBody: unknown;
   let textBody = '';
 
-  const res: any = {
+  const res = {
     statusCode: 200,
     headersSent: false,
     headers: {} as Record<string, string>,
@@ -24,7 +30,7 @@ export function createTestResponse(): TestResponseHarness {
     json(payload: unknown) {
       this.headersSent = true;
       jsonBody = payload;
-      resolveDone?.();
+      complete();
       return this;
     },
     setHeader(key: string, value: string) {
@@ -35,8 +41,12 @@ export function createTestResponse(): TestResponseHarness {
       textBody += chunk;
       return true;
     },
-    end() {
-      resolveDone?.();
+    end(chunk?: string) {
+      if (chunk) {
+        textBody += chunk;
+      }
+      this.headersSent = true;
+      complete();
       return this;
     },
   };

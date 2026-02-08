@@ -1,7 +1,7 @@
 import prismaMock from '../../prisma-mock';
 import exportController from '../../../app/routes/exports/export.controller';
 import { enqueueExportJob } from '../../../app/jobs/import-export.queue';
-import { streamExportRecords } from '../../../app/routes/exports/export.service';
+import { streamExports } from '../../../app/routes/exports/export.service';
 import { createTestResponse } from '../../helpers/test-response';
 
 jest.mock('../../../app/routes/auth/auth', () => ({
@@ -22,9 +22,13 @@ jest.mock('../../../app/routes/exports/config', () => ({
   }),
 }));
 
-jest.mock('../../../app/routes/exports/export.service', () => ({
-  streamExportRecords: jest.fn(),
-}));
+jest.mock('../../../app/routes/exports/export.service', () => {
+  const actual = jest.requireActual('../../../app/routes/exports/export.service');
+  return {
+    ...actual,
+    streamExports: jest.fn(),
+  };
+});
 
 jest.mock('../../../app/jobs/import-export.queue', () => ({
   enqueueImportJob: jest.fn().mockResolvedValue({ id: 'queue-import' }),
@@ -86,25 +90,9 @@ describe('Export Controller', () => {
 
   describe('Streaming', () => {
     it('should stream JSON with nextCursor when limit is reached', async () => {
-      (streamExportRecords as jest.Mock).mockImplementation(async function* () {
-        yield {
-          id: 1,
-          email: 'first@example.com',
-          name: 'First',
-          role: 'user',
-          active: true,
-          created_at: '2026-02-05T00:00:00Z',
-          updated_at: '2026-02-05T00:00:00Z',
-        };
-        yield {
-          id: 2,
-          email: 'second@example.com',
-          name: 'Second',
-          role: 'user',
-          active: true,
-          created_at: '2026-02-05T00:00:00Z',
-          updated_at: '2026-02-05T00:00:00Z',
-        };
+      (streamExports as jest.Mock).mockImplementation(async ({ writeChunk }) => {
+        await writeChunk('{"data":[{"id":1},{"id":2}],"nextCursor":2}');
+        return { count: 2, lastId: 2 };
       });
 
       const result = await runRoute({
@@ -121,16 +109,10 @@ describe('Export Controller', () => {
     });
 
     it('should stream NDJSON with a trailing cursor line', async () => {
-      (streamExportRecords as jest.Mock).mockImplementation(async function* () {
-        yield {
-          id: 1,
-          email: 'first@example.com',
-          name: 'First',
-          role: 'user',
-          active: true,
-          created_at: '2026-02-05T00:00:00Z',
-          updated_at: '2026-02-05T00:00:00Z',
-        };
+      (streamExports as jest.Mock).mockImplementation(async ({ writeChunk }) => {
+        await writeChunk('{"id":1}\n');
+        await writeChunk('{"_type":"cursor","nextCursor":1}\n');
+        return { count: 1, lastId: 1 };
       });
 
       const result = await runRoute({
@@ -193,7 +175,7 @@ describe('Export Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(202);
-      expect((result.body as any).exportJob.id).toBe('exp-1');
+      expect(result.body.exportJob.id).toBe('exp-1');
       expect(enqueueExportJob).toHaveBeenCalledWith({
         jobId: 'exp-1',
         resource: 'articles',
@@ -227,8 +209,8 @@ describe('Export Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(200);
-      expect((result.body as any).exportJob.id).toBe('exp-2');
-      expect((result.body as any).exportJob.downloadUrl).toBe('/api/v1/exports/exp-2/download');
+      expect(result.body.exportJob.id).toBe('exp-2');
+      expect(result.body.exportJob.downloadUrl).toBe('/api/v1/exports/exp-2/download');
     });
   });
 });

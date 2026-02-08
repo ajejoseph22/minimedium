@@ -54,7 +54,35 @@ describe('Import Service', () => {
     logJobLifecycleEventMock.mockClear();
   });
 
-  it('should count distinct records with errors', async () => {
+  it('should return latest job state when claim is not acquired', async () => {
+    prisma.importJob.updateMany.mockResolvedValue({ count: 0 });
+    prisma.importJob.findUnique.mockResolvedValue({
+      id: 'job-claim-missed',
+      status: 'running',
+      resource: 'users',
+      format: 'json',
+      fileName: 'input.json',
+      sourceLocation: '/tmp/input.json',
+      processedRecords: 42,
+      successCount: 40,
+      errorCount: 2,
+      startedAt: new Date('2026-02-08T00:00:00.000Z'),
+    });
+
+    const result = await runImportJob('job-claim-missed', { prisma, cancelCheckInterval: 0 });
+
+    expect(result).toEqual({
+      status: 'running',
+      processedRecords: 42,
+      successCount: 40,
+      errorCount: 2,
+    });
+    expect(parseJsonArrayStream).not.toHaveBeenCalled();
+    expect(validateImportRecord).not.toHaveBeenCalled();
+    expect(upsertImportRecords).not.toHaveBeenCalled();
+  });
+
+  it('should mark failed when all processed records fail', async () => {
     prisma.importJob.findUnique.mockResolvedValue({
       id: 'job-1',
       status: 'queued',
@@ -67,6 +95,7 @@ describe('Import Service', () => {
       errorCount: 0,
       startedAt: null,
     });
+    prisma.importJob.updateMany.mockResolvedValue({ count: 1 });
     prisma.importJob.update.mockResolvedValue({});
     prisma.importError.createMany.mockResolvedValue({ count: 2 });
 
@@ -139,13 +168,79 @@ describe('Import Service', () => {
         event: 'job.completed',
         jobKind: 'import',
         jobId: 'job-1',
-        status: 'partial',
+        status: 'failed',
         jobStartedAt: expect.any(Date),
         counters: expect.objectContaining({
           processedRecords: 2,
           successCount: 0,
           errorCount: 2,
         }),
+      }),
+    );
+  });
+
+  it('should mark partial when some records succeed and some fail', async () => {
+    prisma.importJob.findUnique.mockResolvedValue({
+      id: 'job-partial',
+      status: 'queued',
+      resource: 'users',
+      format: 'json',
+      fileName: 'input.json',
+      sourceLocation: '/tmp/input.json',
+      processedRecords: 0,
+      successCount: 0,
+      errorCount: 0,
+      startedAt: null,
+    });
+    prisma.importJob.updateMany.mockResolvedValue({ count: 1 });
+    prisma.importError.createMany.mockResolvedValue({ count: 1 });
+
+    (parseJsonArrayStream as jest.Mock).mockImplementation(async function* () {
+      yield { record: { email: 'bad' }, index: 0 };
+      yield { record: { id: 2, email: 'ok@example.com', name: 'Ok', role: 'user', active: true }, index: 1 };
+    });
+
+    (validateImportRecord as jest.Mock)
+      .mockResolvedValueOnce({
+        valid: false,
+        skip: false,
+        errors: [
+          {
+            jobId: 'job-partial',
+            recordIndex: 0,
+            errorCode: ValidationErrorCode.INVALID_FIELD_FORMAT,
+            message: 'Invalid email',
+            field: 'email',
+            value: 'bad',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        valid: true,
+        skip: false,
+        errors: [],
+        record: { id: 2, email: 'ok@example.com', name: 'Ok', role: 'user', active: true },
+      });
+
+    (upsertImportRecords as jest.Mock).mockResolvedValue({
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+      errors: [],
+    });
+
+    const result = await runImportJob('job-partial', { prisma, cancelCheckInterval: 0 });
+
+    expect(result.status).toBe('partial');
+    expect(result.successCount).toBe(1);
+    expect(result.errorCount).toBe(1);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'import',
+        jobId: 'job-partial',
+        status: 'partial',
       }),
     );
   });
@@ -163,6 +258,7 @@ describe('Import Service', () => {
       errorCount: 0,
       startedAt: null,
     });
+    prisma.importJob.updateMany.mockResolvedValue({ count: 1 });
     prisma.importJob.update.mockResolvedValue({});
     prisma.importError.createMany.mockResolvedValue({ count: 1 });
 

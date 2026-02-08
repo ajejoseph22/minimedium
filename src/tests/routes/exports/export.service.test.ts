@@ -156,6 +156,7 @@ describe('runExportJob', () => {
 
   beforeEach(() => {
     logJobLifecycleEventMock.mockClear();
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
   });
 
   it('should export NDJSON, persist metadata, and set download URL on success', async () => {
@@ -281,6 +282,7 @@ describe('runExportJob', () => {
   });
 
   it('should return cancelled immediately when job is already cancelled', async () => {
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 1 });
     prisma.exportJob.findUnique.mockResolvedValueOnce({
       id: 'job-3',
       status: 'cancelled',
@@ -467,11 +469,35 @@ describe('runExportJob', () => {
     );
   });
 
-  it('should throw job not found when export job is missing', async () => {
+  it('should throw "job not found" error when export job is missing from DB', async () => {
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 0 });
     prisma.exportJob.findUnique.mockResolvedValueOnce(null);
 
     await expect(runExportJob('missing-job', { prisma, now })).rejects.toThrow(
       'Export job missing-job not found'
     );
+  });
+
+  it('should return latest job state when claim is not acquired', async () => {
+    prisma.exportJob.updateMany.mockResolvedValue({ count: 0 });
+    prisma.exportJob.findUnique.mockResolvedValueOnce({
+      id: 'job-claim-missed',
+      status: 'running',
+      processedRecords: 12,
+      fileSize: 1234,
+      startedAt: new Date('2026-02-06T09:59:00.000Z'),
+      resource: 'users',
+      format: 'ndjson',
+      outputLocation: null,
+    });
+
+    const result = await runExportJob('job-claim-missed', { prisma, now });
+
+    expect(result).toEqual({
+      status: 'running',
+      processedRecords: 12,
+      fileSize: 1234,
+    });
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
   });
 });
