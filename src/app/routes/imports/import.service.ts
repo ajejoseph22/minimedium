@@ -23,6 +23,9 @@ import {
   ResourceErrorCode,
   SystemErrorCode,
 } from '../shared/import-export/types';
+import {
+  logJobLifecycleEvent,
+} from '../shared/import-export/observability';
 import { pathExists } from '../shared/import-export/utils';
 
 export interface RunImportJobOptions {
@@ -70,7 +73,23 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
   }
 
   if (job.status === 'cancelled') {
-    await markJobCancelled(prisma, jobId, now());
+    const finishedAt = now();
+    await markJobCancelled(prisma, jobId, finishedAt);
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'import',
+      jobId,
+      status: 'cancelled',
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: job.startedAt ?? finishedAt,
+      counters: {
+        processedRecords: job.processedRecords,
+        successCount: job.successCount,
+        errorCount: job.errorCount,
+      },
+    });
     return {
       status: 'cancelled',
       processedRecords: job.processedRecords,
@@ -79,11 +98,26 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     };
   }
 
+  const startedAt = job.startedAt ?? now();
   await prisma.importJob.update({
     where: { id: jobId },
     data: {
       status: 'running',
-      startedAt: job.startedAt ?? now(),
+      startedAt,
+    },
+  });
+  logJobLifecycleEvent({
+    event: 'job.started',
+    jobKind: 'import',
+    jobId,
+    status: 'running',
+    resource: job.resource,
+    format: job.format,
+    timestamp: startedAt,
+    counters: {
+      processedRecords: job.processedRecords,
+      successCount: job.successCount,
+      errorCount: job.errorCount,
     },
   });
 
@@ -226,13 +260,14 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     await flushErrors();
 
     if (cancelled) {
+      const finishedAt = now();
       await finalizeJob(prisma, jobId, {
         status: 'cancelled',
         processedRecords,
         successCount,
         errorCount,
         totalRecords: processedRecords,
-        finishedAt: now(),
+        finishedAt,
         errorSummary: buildErrorSummary(
           persistedErrorCount,
           errorPersistenceFailures,
@@ -240,6 +275,21 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
           errorReportFormat,
           errorReportGenerationFailed,
         ),
+      });
+      logJobLifecycleEvent({
+        event: 'job.completed',
+        jobKind: 'import',
+        jobId,
+        status: 'cancelled',
+        resource: job.resource,
+        format: job.format,
+        timestamp: finishedAt,
+        jobStartedAt: startedAt,
+        counters: {
+          processedRecords,
+          successCount,
+          errorCount,
+        },
       });
       return { status: 'cancelled', processedRecords, successCount, errorCount };
     }
@@ -251,13 +301,14 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     await generateErrorReport();
 
     const status: JobStatus = errorCount > 0 ? 'partial' : 'succeeded';
+    const finishedAt = now();
     await finalizeJob(prisma, jobId, {
       status,
       processedRecords,
       successCount,
       errorCount,
       totalRecords: processedRecords,
-      finishedAt: now(),
+      finishedAt,
       errorSummary: buildErrorSummary(
         persistedErrorCount,
         errorPersistenceFailures,
@@ -265,6 +316,21 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
         errorReportFormat,
         errorReportGenerationFailed,
       ),
+    });
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'import',
+      jobId,
+      status,
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: startedAt,
+      counters: {
+        processedRecords,
+        successCount,
+        errorCount,
+      },
     });
 
     return { status, processedRecords, successCount, errorCount };
@@ -304,13 +370,14 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
 
     await generateErrorReport();
 
+    const finishedAt = now();
     await finalizeJob(prisma, jobId, {
       status: 'failed',
       processedRecords,
       successCount,
       errorCount,
       totalRecords: processedRecords,
-      finishedAt: now(),
+      finishedAt,
       errorSummary: buildErrorSummary(
         persistedErrorCount,
         errorPersistenceFailures,
@@ -318,6 +385,27 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
         errorReportFormat,
         errorReportGenerationFailed,
       ),
+    });
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'import',
+      jobId,
+      status: 'failed',
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: startedAt,
+      counters: {
+        processedRecords,
+        successCount,
+        errorCount,
+      },
+      level: 'error',
+      details: {
+        errorCode: code,
+        message,
+        details,
+      },
     });
 
     return { status: 'failed', processedRecords, successCount, errorCount };

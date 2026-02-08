@@ -12,6 +12,9 @@ import {
   ResourceErrorCode,
   SystemErrorCode,
 } from '../shared/import-export/types';
+import {
+  logJobLifecycleEvent,
+} from '../shared/import-export/observability';
 import prismaClient from '../../../prisma/prisma-client';
 
 
@@ -137,7 +140,22 @@ export async function runExportJob(
   }
 
   if (job.status === 'cancelled') {
-    await markJobCancelled(prisma, jobId, now());
+    const finishedAt = now();
+    await markJobCancelled(prisma, jobId, finishedAt);
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'export',
+      jobId,
+      status: 'cancelled',
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: job.startedAt ?? finishedAt, // fallback so metrics compute duration as 0ms
+      counters: {
+        processedRecords: job.processedRecords,
+        errorCount: 0, // exports have no errors
+      },
+    });
     return {
       status: 'cancelled',
       processedRecords: job.processedRecords,
@@ -145,11 +163,25 @@ export async function runExportJob(
     };
   }
 
+  const startedAt = job.startedAt ?? now();
   await prisma.exportJob.update({
     where: { id: jobId },
     data: {
       status: 'running',
-      startedAt: job.startedAt ?? now(),
+      startedAt,
+    },
+  });
+  logJobLifecycleEvent({
+    event: 'job.started',
+    jobKind: 'export',
+    jobId,
+    status: 'running',
+    resource: job.resource,
+    format: job.format,
+    timestamp: startedAt,
+    counters: {
+      processedRecords: job.processedRecords,
+      errorCount: 0,
     },
   });
 
@@ -207,24 +239,54 @@ export async function runExportJob(
 
     if (cancelled) {
       await storage.delete(outputKey);
+      const finishedAt = now();
       await finalizeJob(prisma, jobId, {
         status: 'cancelled',
         processedRecords,
         totalRecords: processedRecords,
-        finishedAt: now(),
+        finishedAt,
+      });
+      logJobLifecycleEvent({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId,
+        status: 'cancelled',
+        resource: job.resource,
+        format: job.format,
+        timestamp: finishedAt,
+        jobStartedAt: startedAt,
+        counters: {
+          processedRecords,
+          errorCount: 0,
+        },
       });
       return { status: 'cancelled', processedRecords, fileSize: null };
     }
 
+    const finishedAt = now();
     await finalizeJob(prisma, jobId, {
       status: 'succeeded',
       processedRecords,
       totalRecords: processedRecords,
-      finishedAt: now(),
+      finishedAt,
       outputLocation: saved.location,
       downloadUrl: buildDownloadUrl(jobId),
       fileSize: saved.bytes,
       expiresAt: buildExpiry(now, config.fileRetentionHours),
+    });
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'export',
+      jobId,
+      status: 'succeeded',
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: startedAt,
+      counters: {
+        processedRecords,
+        errorCount: 0,
+      },
     });
 
     return { status: 'succeeded', processedRecords, fileSize: saved.bytes };
@@ -236,14 +298,36 @@ export async function runExportJob(
       // ignore cleanup errors
     }
 
+    const finishedAt = now();
     await finalizeJob(prisma, jobId, {
       status: 'failed',
       processedRecords,
       totalRecords: processedRecords,
-      finishedAt: now(),
+      finishedAt,
     });
 
     const { code, message, details } = normalizeError(error);
+    const failedErrorCount = 1;
+    logJobLifecycleEvent({
+      event: 'job.completed',
+      jobKind: 'export',
+      jobId,
+      status: 'failed',
+      resource: job.resource,
+      format: job.format,
+      timestamp: finishedAt,
+      jobStartedAt: startedAt,
+      counters: {
+        processedRecords,
+        errorCount: failedErrorCount,
+      },
+      level: 'error',
+      details: {
+        errorCode: code,
+        message,
+        details,
+      },
+    });
     throw new ExportServiceError(code, message, details);
   }
 }
