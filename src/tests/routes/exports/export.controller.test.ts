@@ -2,6 +2,7 @@ import prismaMock from '../../prisma-mock';
 import exportController from '../../../app/routes/exports/export.controller';
 import { enqueueExportJob } from '../../../app/jobs/import-export.queue';
 import { streamExportRecords } from '../../../app/routes/exports/export.service';
+import { createTestResponse } from '../../helpers/test-response';
 
 jest.mock('../../../app/routes/auth/auth', () => ({
   __esModule: true,
@@ -40,45 +41,6 @@ type RunRouteOptions = {
   headers?: Record<string, string>;
   auth?: { user?: { id?: number } };
 };
-
-function createTestResponse() {
-  let resolveDone: (() => void) | null = null;
-  const done = new Promise<void>((resolve) => {
-    resolveDone = resolve;
-  });
-  let jsonBody: unknown;
-  let textBody = '';
-
-  const res = {
-    statusCode: 200,
-    headersSent: false,
-    headers: {} as Record<string, string>,
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    json(payload: unknown) {
-      this.headersSent = true;
-      jsonBody = payload;
-      resolveDone?.();
-      return this;
-    },
-    setHeader(key: string, value: string) {
-      this.headers[key] = value;
-    },
-    write(chunk: string) {
-      this.headersSent = true;
-      textBody += chunk;
-      return true;
-    },
-    end() {
-      resolveDone?.();
-      return this;
-    },
-  };
-
-  return { res, done, getJsonBody: () => jsonBody, getTextBody: () => textBody };
-}
 
 async function runRoute(options: RunRouteOptions) {
   const lowerHeaders = Object.fromEntries(

@@ -2,6 +2,8 @@ import prismaMock from '../../prisma-mock';
 import importController from '../../../app/routes/imports/import.controller';
 import { enqueueImportJob } from '../../../app/jobs/import-export.queue';
 import { fetchRemoteImport } from '../../../app/routes/imports/intake.service';
+import { createReadStream } from 'fs';
+import { createTestResponse } from '../../helpers/test-response';
 
 jest.mock('../../../app/routes/auth/auth', () => ({
   __esModule: true,
@@ -14,10 +16,20 @@ jest.mock('../../../app/jobs/import-export.queue', () => ({
 }));
 
 jest.mock('../../../app/routes/imports/intake.service', () => ({
-  createImportUploadMiddleware: () => (_req: any, _res: any, next: any) => next(),
   fetchRemoteImport: jest.fn(),
   mapUploadedFileToImportIntakeResult: jest.fn(),
   validateUploadedFile: jest.fn(),
+}));
+
+jest.mock('fs', () => ({
+  createReadStream: jest.fn(() => ({
+    on: jest.fn().mockReturnThis(),
+    pipe: jest.fn((res: any) => {
+      res.write('{"recordIndex":3,"message":"user_id does not exist"}\n');
+      res.end();
+      return res;
+    }),
+  })),
 }));
 
 const prisma = prismaMock as unknown as any;
@@ -31,43 +43,6 @@ type RunRouteOptions = {
   auth?: { user?: { id?: number } };
   file?: unknown;
 };
-
-function createTestResponse() {
-  let resolveDone: (() => void) | null = null;
-  const done = new Promise<void>((resolve) => {
-    resolveDone = resolve;
-  });
-  let jsonBody: unknown;
-
-  const res: any = {
-    statusCode: 200,
-    headersSent: false,
-    headers: {} as Record<string, string>,
-    status(code: number) {
-      this.statusCode = code;
-      return this;
-    },
-    json(payload: unknown) {
-      this.headersSent = true;
-      jsonBody = payload;
-      resolveDone?.();
-      return this;
-    },
-    setHeader(key: string, value: string) {
-      this.headers[key] = value;
-    },
-    write() {
-      this.headersSent = true;
-      return true;
-    },
-    end() {
-      resolveDone?.();
-      return this;
-    },
-  };
-
-  return { res, done, getJsonBody: () => jsonBody };
-}
 
 async function runRoute(options: RunRouteOptions) {
   const lowerHeaders = Object.fromEntries(
@@ -87,7 +62,7 @@ async function runRoute(options: RunRouteOptions) {
     on: jest.fn(),
   };
 
-  const { res, done, getJsonBody } = createTestResponse();
+  const { res, done, getJsonBody, getTextBody } = createTestResponse();
   let nextError: any = null;
   const next = (error?: unknown) => {
     if (error) {
@@ -104,6 +79,7 @@ async function runRoute(options: RunRouteOptions) {
   return {
     res,
     body: getJsonBody(),
+    textBody: getTextBody(),
     nextError,
   };
 }
@@ -196,7 +172,7 @@ describe('Import Controller', () => {
       expect(enqueueImportJob).not.toHaveBeenCalled();
     });
 
-    it('should return import job status with inline errors and report URL', async () => {
+    it('should return import job status with error preview and report URL', async () => {
       prisma.importJob.findFirst.mockResolvedValueOnce({
         id: 'imp-2',
         status: 'partial',
@@ -213,7 +189,12 @@ describe('Import Controller', () => {
         fileSize: 123,
         sourceLocation: '/tmp/imports/comments.ndjson',
         idempotencyKey: 'idem-2',
-        errorSummary: { reportLocation: '/tmp/reports/imp-2.ndjson' },
+        errorSummary: {
+          reportLocation: '/tmp/import-errors/imp-2.ndjson',
+          reportStatus: 'complete',
+          persistedErrorCount: 1,
+          reportFormat: 'ndjson',
+        },
       });
       prisma.importError.findMany.mockResolvedValueOnce([
         {
@@ -238,9 +219,95 @@ describe('Import Controller', () => {
 
       expect(result.nextError).toBeNull();
       expect(result.res.statusCode).toBe(200);
-      expect((result.body as any).importJob.id).toBe('imp-2');
-      expect((result.body as any).errors).toHaveLength(1);
-      expect((result.body as any).errorReportUrl).toBe('/tmp/reports/imp-2.ndjson');
+      const body = result.body as any;
+      expect(body.importJob.id).toBe('imp-2');
+      expect(body.errorsPreview).toHaveLength(1);
+      expect(body.errorsPreviewCount).toBe(1);
+      expect(body.hasMoreErrors).toBe(false);
+      expect(body.errorReportUrl).toBe('/api/v1/imports/imp-2/errors/download');
+      expect(body.errorReportStatus).toBe('complete');
+      expect(body.importJob.errorSummary.reportLocation).toBeUndefined();
+    });
+
+    it('should enforce error preview default and maximum', async () => {
+      prisma.importJob.findFirst.mockResolvedValue({
+        id: 'imp-3',
+        status: 'partial',
+        resource: 'users',
+        format: 'json',
+        totalRecords: 200,
+        processedRecords: 200,
+        successCount: 100,
+        errorCount: 100,
+        createdAt: new Date('2026-02-06T12:00:00Z'),
+        startedAt: new Date('2026-02-06T12:00:10Z'),
+        finishedAt: new Date('2026-02-06T12:00:50Z'),
+        fileName: 'users.json',
+        fileSize: 123,
+        sourceLocation: '/tmp/imports/users.json',
+        idempotencyKey: 'idem-3',
+        errorSummary: { persistedErrorCount: 100, reportStatus: 'complete' },
+      });
+      prisma.importError.findMany.mockResolvedValue([]);
+
+      await runRoute({
+        method: 'GET',
+        url: '/v1/imports/imp-3',
+        auth: { user: { id: 42 } },
+      });
+
+      expect(prisma.importError.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          take: 20,
+        }),
+      );
+
+      const tooLarge = await runRoute({
+        method: 'GET',
+        url: '/v1/imports/imp-3',
+        query: { errorPreviewLimit: '101' },
+        auth: { user: { id: 42 } },
+      });
+
+      expect(tooLarge.nextError).not.toBeNull();
+      expect(tooLarge.nextError.errorCode).toBe(422);
+    });
+
+    it('should stream full import error report from download endpoint', async () => {
+      prisma.importJob.findFirst.mockResolvedValueOnce({
+        id: 'imp-4',
+        status: 'partial',
+        resource: 'comments',
+        format: 'ndjson',
+        totalRecords: 10,
+        processedRecords: 10,
+        successCount: 9,
+        errorCount: 1,
+        createdAt: new Date('2026-02-06T12:00:00Z'),
+        startedAt: new Date('2026-02-06T12:00:10Z'),
+        finishedAt: new Date('2026-02-06T12:00:50Z'),
+        fileName: 'comments.ndjson',
+        fileSize: 123,
+        sourceLocation: '/tmp/imports/comments.ndjson',
+        idempotencyKey: 'idem-4',
+        errorSummary: {
+          reportLocation: '/tmp/import-errors/imp-4.ndjson',
+          reportStatus: 'complete',
+          reportFormat: 'ndjson',
+        },
+      });
+
+      const result = await runRoute({
+        method: 'GET',
+        url: '/v1/imports/imp-4/errors/download',
+        auth: { user: { id: 42 } },
+      });
+
+      expect(result.nextError).toBeNull();
+      expect(result.res.statusCode).toBe(200);
+      expect(result.res.headers['Content-Type']).toBe('application/x-ndjson');
+      expect(result.textBody).toContain('"recordIndex":3');
+      expect(createReadStream).toHaveBeenCalledWith('/tmp/import-errors/imp-4.ndjson');
     });
   });
 });

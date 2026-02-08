@@ -1,3 +1,4 @@
+import { createReadStream } from 'fs';
 import { NextFunction, Response, Router } from 'express';
 import prismaClient from '../../../prisma/prisma-client';
 import HttpException from '../../models/http-exception.model';
@@ -101,26 +102,82 @@ router.get('/v1/imports/:jobId', auth.required, async (req: ImportRequest, res: 
       throw new HttpException(404, { errors: { job: ['import job not found'] } });
     }
 
-    const errorLimit = parsePositiveInteger(getQueryParamValue(req.query.errorLimit), 100, 500, 'errorLimit');
-    const errors = await prismaClient.importError.findMany({
+    const rawPreviewLimit =
+      getQueryParamValue(req.query.errorPreviewLimit) ?? getQueryParamValue(req.query.errorLimit);
+    const previewLimit = parsePositiveInteger(rawPreviewLimit, 20, 100, 'errorPreviewLimit');
+    const errorsPreview = await prismaClient.importError.findMany({
       where: { jobId: job.id },
       orderBy: { recordIndex: 'asc' },
-      take: errorLimit,
+      take: previewLimit,
     });
 
     const errorSummary = toJsonObject(job.errorSummary);
-    const errorReportUrl =
-      typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : undefined;
+    const persistedErrorCount =
+      typeof errorSummary?.persistedErrorCount === 'number' ? errorSummary.persistedErrorCount : null;
+    const reportLocation =
+      typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : null;
+    const errorReportStatus =
+      typeof errorSummary?.reportStatus === 'string' ? (errorSummary.reportStatus as string) : undefined;
+    const totalErrorCount = persistedErrorCount ?? job.errorCount;
+    const errorReportUrl = reportLocation ? buildImportErrorReportDownloadUrl(job.id) : undefined;
 
     res.status(200).json({
       importJob: serializeImportJob(job),
-      errors: errors.map(serializeImportError),
+      errorsPreview: errorsPreview.map(serializeImportError),
+      errorsPreviewCount: errorsPreview.length,
+      hasMoreErrors: totalErrorCount > errorsPreview.length,
       errorReportUrl,
+      errorReportStatus,
     });
   } catch (error) {
     next(error);
   }
 });
+
+router.get(
+  '/v1/imports/:jobId/errors/download',
+  auth.required,
+  async (req: ImportRequest, res: Response, next: NextFunction) => {
+    try {
+      const createdById = requireUserId(req);
+      const job = await prismaClient.importJob.findFirst({
+        where: { id: req.params.jobId, createdById },
+      });
+
+      if (!job) {
+        throw new HttpException(404, { errors: { job: ['import job not found'] } });
+      }
+
+      const errorSummary = toJsonObject(job.errorSummary);
+      const reportLocation =
+        typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : null;
+      const reportStatus =
+        typeof errorSummary?.reportStatus === 'string' ? (errorSummary.reportStatus as string) : undefined;
+      const reportFormat = typeof errorSummary?.reportFormat === 'string' ? errorSummary.reportFormat : null;
+
+      if (!reportLocation) {
+        throw new HttpException(404, { errors: { job: ['import error report not found'] } });
+      }
+
+      if (reportStatus === 'failed') {
+        throw new HttpException(409, { errors: { job: ['import error report is not available'] } });
+      }
+
+      const format = reportFormat === 'json' ? 'json' : 'ndjson';
+      const extension = format === 'json' ? 'json' : 'ndjson';
+      res.setHeader('Content-Type', format === 'json' ? 'application/json' : 'application/x-ndjson');
+      res.setHeader('Content-Disposition', `attachment; filename="${job.id}-errors.${extension}"`);
+
+      const stream = createReadStream(reportLocation);
+      stream.on('error', () => {
+        next(new HttpException(404, { errors: { job: ['import error report not found'] } }));
+      });
+      stream.pipe(res);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 function getImportPayload(req: ImportRequest): ImportCreatePayload {
   const body = req.body?.import ?? req.body;
@@ -214,8 +271,26 @@ function serializeImportJob(job: {
     fileName: job.fileName,
     fileSize: job.fileSize,
     sourceUrl: job.sourceLocation,
-    errorSummary: toJsonObject(job.errorSummary),
+    errorSummary: sanitizeImportErrorSummary(job.errorSummary),
   };
+}
+
+function sanitizeImportErrorSummary(
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, unknown> | null {
+  const summary = toJsonObject(value);
+  if (!summary) {
+    return null;
+  }
+
+  const { reportLocation: _reportLocation, ...safeSummary } = summary;
+  return safeSummary;
+}
+
+function buildImportErrorReportDownloadUrl(jobId: string): string {
+  const baseUrl = process.env.IMPORT_ERROR_REPORT_DOWNLOAD_BASE_URL?.replace(/\/$/, '');
+  const pathSuffix = `/api/v1/imports/${jobId}/errors/download`;
+  return baseUrl ? `${baseUrl}${pathSuffix}` : pathSuffix;
 }
 
 export default router;
