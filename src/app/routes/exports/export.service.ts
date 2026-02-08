@@ -1,7 +1,8 @@
 import { once } from 'events';
 import { PassThrough } from 'stream';
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { createExportStorageAdapter, StorageAdapter } from '../../storage';
+import prismaClient from '../../../prisma/prisma-client';
+import { createExportStorageAdapter } from '../../storage';
 import { loadExportConfig } from './config';
 import {
   EntityType,
@@ -15,60 +16,34 @@ import {
 import {
   logJobLifecycleEvent,
 } from '../../jobs/observability';
-import prismaClient from '../../../prisma/prisma-client';
-
-
-export interface StreamExportOptions {
-  entityType: EntityType;
-  limit?: number;
-  cursor?: number | null;
-  prisma?: PrismaClient;
-  batchSize?: number;
-  signal?: AbortSignal;
-}
-
-interface UserRow {
-  id: number;
-  email: string;
-  name: string | null;
-  username: string;
-  role: string;
-  active: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-interface ArticleRow {
-  id: number;
-  slug: string;
-  title: string;
-  body: string;
-  authorId: number;
-  publishedAt: Date | null;
-  status: string;
-  tagList: { name: string }[];
-}
-
-interface CommentRow {
-  id: number;
-  articleId: number;
-  userId: number;
-  body: string;
-  createdAt: Date;
-}
-
-export interface RunExportJobOptions {
-  prisma?: PrismaClient;
-  storage?: StorageAdapter;
-  now?: () => Date;
-  cancelCheckInterval?: number;
-}
-
-export interface RunExportJobResult {
-  status: JobStatus;
-  processedRecords: number;
-  fileSize: number | null;
-}
+import {
+  getQueryParamValue,
+  isObject,
+  normalizeFormat as normalizeDownloadFormat,
+  normalizeJsonValue,
+  parseCursor,
+  parseEntityType,
+  parseFormat,
+  parseLimit,
+} from '../shared/import-export/utils';
+import type {
+  ArticleRow,
+  CommentRow,
+  CreateExportJobOptions,
+  CreateExportJobResult,
+  ExportCreatePayload,
+  ExportFileMetadata,
+  ExportQuery,
+  GetExportFileMetadataOptions,
+  GetExportJobOptions,
+  RunExportJobOptions,
+  RunExportJobResult,
+  StreamExportOptions,
+  StreamExportsOptions,
+  StreamExportsResult,
+  UserRow,
+} from './export.model';
+import HttpException from '../../models/http-exception.model';
 
 const DEFAULT_CANCEL_CHECK_INTERVAL = 500;
 
@@ -131,6 +106,18 @@ export async function runExportJob(
     options.cancelCheckInterval ?? DEFAULT_CANCEL_CHECK_INTERVAL;
   const config = loadExportConfig();
 
+  const startedAt = now();
+  const claimResult = await prisma.exportJob.updateMany({
+    where: {
+      id: jobId,
+      status: 'queued',
+    },
+    data: {
+      status: 'running',
+      startedAt,
+    },
+  });
+
   const job = await prisma.exportJob.findUnique({ where: { id: jobId } });
   if (!job) {
     throw new ExportServiceError(
@@ -139,6 +126,17 @@ export async function runExportJob(
     );
   }
 
+  // Job claimed by another worker process, return current status without processing
+  if (!claimResult.count) {
+    return {
+      status: job.status,
+      processedRecords: job.processedRecords,
+      fileSize: job.fileSize ?? null,
+    };
+  }
+
+  // Job claimed successfully by this worker process, proceeed with processing.
+  // Pre-run cancellation check
   if (job.status === 'cancelled') {
     const finishedAt = now();
     await markJobCancelled(prisma, jobId, finishedAt);
@@ -153,9 +151,10 @@ export async function runExportJob(
       jobStartedAt: job.startedAt ?? finishedAt, // fallback so metrics compute duration as 0ms
       counters: {
         processedRecords: job.processedRecords,
-        errorCount: 0, // exports have no errors
+        errorCount: 0,
       },
     });
+
     return {
       status: 'cancelled',
       processedRecords: job.processedRecords,
@@ -163,14 +162,6 @@ export async function runExportJob(
     };
   }
 
-  const startedAt = job.startedAt ?? now();
-  await prisma.exportJob.update({
-    where: { id: jobId },
-    data: {
-      status: 'running',
-      startedAt,
-    },
-  });
   logJobLifecycleEvent({
     event: 'job.started',
     jobKind: 'export',
@@ -178,7 +169,7 @@ export async function runExportJob(
     status: 'running',
     resource: job.resource,
     format: job.format,
-    timestamp: startedAt,
+    timestamp: job.startedAt ?? startedAt,
     counters: {
       processedRecords: job.processedRecords,
       errorCount: 0,
@@ -186,7 +177,7 @@ export async function runExportJob(
   });
 
   const entityType = normalizeEntityType(job.resource);
-  const format = normalizeFormat(job.format);
+  const format = normalizeExportJobFormat(job.format);
   const outputKey = job.outputLocation ?? buildOutputKey(jobId, format);
   const outputStream = new PassThrough();
   const savePromise = storage.saveStream(outputKey, outputStream);
@@ -246,6 +237,7 @@ export async function runExportJob(
         totalRecords: processedRecords,
         finishedAt,
       });
+
       logJobLifecycleEvent({
         event: 'job.completed',
         jobKind: 'export',
@@ -347,7 +339,7 @@ function normalizeEntityType(resource: string): EntityType {
   );
 }
 
-function normalizeFormat(format: string | null): FileFormat {
+function normalizeExportJobFormat(format: string | null): FileFormat {
   if (format === 'ndjson' || format === 'json') {
     return format;
   }
@@ -564,5 +556,200 @@ function mapCommentExport(comment: CommentRow): ExportRecord {
     user_id: comment.userId,
     body: comment.body,
     created_at: comment.createdAt.toISOString(),
+  };
+}
+
+export function getExportPayload(body: unknown): ExportCreatePayload {
+  const candidate = isObject(body) && 'export' in body ? (body as Record<string, unknown>).export : body;
+  if (!isObject(candidate)) {
+    return {};
+  }
+  return candidate as ExportCreatePayload;
+}
+
+export function parseExportQuery(query: Record<string, unknown>): ExportQuery {
+  const config = loadExportConfig();
+  const resource = getQueryParamValue(query.resource);
+  const formatValue = getQueryParamValue(query.format);
+  const limitValue = getQueryParamValue(query.limit);
+  const cursorValue = getQueryParamValue(query.cursor);
+
+  const entityType = parseEntityType(resource);
+  const format = parseFormat(formatValue);
+  const limit = parseLimit(limitValue, config.exportStreamMaxLimit);
+  const cursor = parseCursor(cursorValue);
+
+  return { entityType, format, limit, cursor };
+}
+
+export async function createExportJob(options: CreateExportJobOptions): Promise<CreateExportJobResult> {
+  const prisma = options.prisma ?? prismaClient;
+  const resource = parseEntityType(options.payload.resource);
+  const format = parseFormat(options.payload.format);
+  const idempotencyKey = options.idempotencyKey ?? null;
+
+  if (idempotencyKey) {
+    const existing = await prisma.exportJob.findFirst({
+      where: { createdById: options.createdById, idempotencyKey, resource },
+    });
+
+    if (existing) {
+      return { statusCode: 200, exportJob: serializeExportJob(existing) };
+    }
+  }
+
+  const normalizedFilters = normalizeJsonValue(options.payload.filters);
+  const normalizedFields = normalizeJsonValue(options.payload.fields);
+
+  const created = await prisma.exportJob.create({
+    data: {
+      status: 'queued',
+      resource,
+      format,
+      ...(normalizedFilters !== null ? { filters: normalizedFilters } : {}),
+      ...(normalizedFields !== null ? { fields: normalizedFields } : {}),
+      idempotencyKey,
+      createdById: options.createdById,
+      requestHash: null,
+    },
+  });
+
+  const { enqueueExportJob } = await import('../../jobs/import-export.queue');
+  await enqueueExportJob({
+    jobId: created.id,
+    resource: created.resource,
+    format: created.format,
+  });
+
+  return { statusCode: 202, exportJob: serializeExportJob(created) };
+}
+
+export async function getExportJob(options: GetExportJobOptions) {
+  const prisma = options.prisma ?? prismaClient;
+  const job = await prisma.exportJob.findFirst({
+    where: { id: options.jobId, createdById: options.createdById },
+  });
+
+  if (!job) {
+    throw new HttpException(404, { errors: { job: ['export job not found'] } });
+  }
+
+  return { exportJob: serializeExportJob(job) };
+}
+
+export async function getExportFileMetadata(
+  options: GetExportFileMetadataOptions,
+): Promise<ExportFileMetadata> {
+  const prisma = options.prisma ?? prismaClient;
+  const now = options.now ?? Date.now;
+  const job = await prisma.exportJob.findFirst({
+    where: { id: options.jobId, createdById: options.createdById },
+  });
+
+  if (!job) {
+    throw new HttpException(404, { errors: { job: ['export job not found'] } });
+  }
+
+  if (job.status !== 'succeeded' || !job.outputLocation) {
+    throw new HttpException(409, { errors: { job: ['export is not ready for download'] } });
+  }
+
+  if (job.expiresAt && job.expiresAt.getTime() < now()) {
+    throw new HttpException(410, { errors: { job: ['download URL has expired'] } });
+  }
+
+  const format = normalizeDownloadFormat(job.format);
+
+  return {
+    outputLocation: job.outputLocation,
+    contentType: format === 'json' ? 'application/json' : 'application/x-ndjson',
+    contentDisposition: `attachment; filename="${job.id}.${format}"`,
+  };
+}
+
+export async function streamExports(options: StreamExportsOptions): Promise<StreamExportsResult> {
+  const { entityType, format, limit, cursor, signal, writeChunk, onRecord } = options;
+  const streamRecords = options.streamRecords ?? streamExportRecords;
+  let count = 0;
+  let lastId: number | null = null;
+  let first = true;
+
+  if (format === 'json') {
+    await writeChunk('{"data":[');
+  }
+
+  for await (const record of streamRecords({ entityType, limit, cursor, signal })) {
+    const payload = JSON.stringify(record);
+
+    if (format === 'json') {
+      await writeChunk(first ? payload : `,${payload}`);
+    } else {
+      await writeChunk(`${payload}\n`);
+    }
+
+    count += 1;
+    lastId = record.id;
+    onRecord?.({ count, lastId });
+    first = false;
+  }
+
+  const nextCursor = count === limit ? lastId : null;
+
+  if (format === 'json') {
+    await writeChunk(`],"nextCursor":${nextCursor ?? 'null'}}`);
+  } else {
+    await writeChunk(`${JSON.stringify({ _type: 'cursor', nextCursor })}\n`);
+  }
+
+  return { count, lastId };
+}
+
+export function buildExportStreamClosingChunk(
+  format: FileFormat,
+  count: number,
+  limit: number,
+  lastId: number | null,
+): string {
+  const nextCursor = count === limit ? lastId : null;
+
+  if (format === 'json') {
+    return `],"nextCursor":${nextCursor ?? 'null'}}`;
+  }
+
+  return `${JSON.stringify({ _type: 'cursor', nextCursor })}\n`;
+}
+
+export function serializeExportJob(job: {
+  id: string;
+  status: string;
+  resource: string;
+  format: string;
+  totalRecords: number | null;
+  processedRecords: number;
+  createdAt: Date;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  expiresAt: Date | null;
+  idempotencyKey: string | null;
+  outputLocation: string | null;
+  downloadUrl: string | null;
+  fileSize: number | null;
+}) {
+  return {
+    id: job.id,
+    status: job.status,
+    entityType: job.resource,
+    format: job.format,
+    totalRecords: job.totalRecords,
+    processedRecords: job.processedRecords,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.finishedAt,
+    expiresAt: job.expiresAt,
+    createdBy: undefined,
+    idempotencyKey: job.idempotencyKey,
+    outputPath: job.outputLocation,
+    downloadUrl: job.downloadUrl,
+    fileSize: job.fileSize,
   };
 }

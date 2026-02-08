@@ -5,7 +5,13 @@ import type { Prisma, PrismaClient } from '@prisma/client';
 import prismaClient from '../../../prisma/prisma-client';
 import { createImportStorageAdapter } from '../../storage';
 import { loadImportConfig } from './config';
-import { ImportExportError } from './intake.service';
+import {
+  fetchRemoteImport,
+  ImportExportError,
+  mapUploadedFileToImportIntakeResult,
+  UploadedFile,
+  validateUploadedFile,
+} from './intake.service';
 import { ImportExportParseError, parseJsonArrayStream, parseNdjsonStream } from './parsing.service';
 import { upsertImportRecords, IndexedImportRecord } from './upsert.service';
 import { validateImportRecord } from './validation/validation.service';
@@ -26,38 +32,39 @@ import {
 import {
   logJobLifecycleEvent,
 } from '../../jobs/observability';
-import { pathExists } from '../shared/import-export/utils';
-
-export interface RunImportJobOptions {
-  prisma?: PrismaClient;
-  now?: () => Date;
-  cancelCheckInterval?: number;
-}
-
-export interface RunImportJobResult {
-  status: JobStatus;
-  processedRecords: number;
-  successCount: number;
-  errorCount: number;
-}
-
-interface RecordErrorPayload {
-  error: CreateRecordErrorOptions;
-  recordId: string | null;
-  details?: Prisma.InputJsonValue | null;
-}
+import {
+  isObject,
+  parseEntityType,
+  parseFormat,
+  parsePositiveInteger,
+  pathExists,
+  toJsonObject,
+} from '../shared/import-export/utils';
+import type {
+  CreateImportJobOptions,
+  CreateImportJobResult,
+  ErrorReportFileMetadata,
+  GetErrorReportFileOptions,
+  GetImportJobStatusOptions,
+  ImportCreatePayload,
+  ImportIntakeResult,
+  RecordErrorPayload,
+  RunImportJobOptions,
+  RunImportJobResult,
+} from './import.model';
+import HttpException from '../../models/http-exception.model';
 
 const ERROR_FLUSH_SIZE = 500;
 const DEFAULT_CANCEL_CHECK_INTERVAL = 500;
 
-class ImportPipelineError extends Error {
+class ImportServiceError extends Error {
   constructor(
     public code: ImportExportErrorCode,
     message: string,
     public details?: Prisma.InputJsonValue,
   ) {
     super(message);
-    this.name = 'ImportPipelineError';
+    this.name = 'ImportServiceError';
   }
 }
 
@@ -67,11 +74,36 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
   const cancelCheckInterval = options.cancelCheckInterval ?? DEFAULT_CANCEL_CHECK_INTERVAL;
   const config = loadImportConfig();
 
+  const startedAt = now();
+  const claimResult = await prisma.importJob.updateMany({
+    where: {
+      id: jobId,
+      status: 'queued',
+    },
+    data: {
+      status: 'running',
+      startedAt,
+    },
+  });
+
+
   const job = await prisma.importJob.findUnique({ where: { id: jobId } });
   if (!job) {
-    throw new ImportPipelineError(ResourceErrorCode.JOB_NOT_FOUND, `Import job ${jobId} not found`);
+    throw new ImportServiceError(ResourceErrorCode.JOB_NOT_FOUND, `Import job ${jobId} not found`);
   }
 
+  // Job claimed by another worker process, return current status without processing
+  if (!claimResult.count) {
+    return {
+      status: job.status,
+      processedRecords: job.processedRecords,
+      successCount: job.successCount,
+      errorCount: job.errorCount,
+    };
+  }
+
+  // Job claimed successfully by this worker process, proceeed with processing.
+  // Pre-run cancellation check
   if (job.status === 'cancelled') {
     const finishedAt = now();
     await markJobCancelled(prisma, jobId, finishedAt);
@@ -90,6 +122,7 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
         errorCount: job.errorCount,
       },
     });
+
     return {
       status: 'cancelled',
       processedRecords: job.processedRecords,
@@ -98,14 +131,6 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     };
   }
 
-  const startedAt = job.startedAt ?? now();
-  await prisma.importJob.update({
-    where: { id: jobId },
-    data: {
-      status: 'running',
-      startedAt,
-    },
-  });
   logJobLifecycleEvent({
     event: 'job.started',
     jobKind: 'import',
@@ -113,7 +138,7 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     status: 'running',
     resource: job.resource,
     format: job.format,
-    timestamp: startedAt,
+    timestamp: job.startedAt ?? startedAt,
     counters: {
       processedRecords: job.processedRecords,
       successCount: job.successCount,
@@ -295,12 +320,19 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     }
 
     if (processedRecords === 0) {
-      throw new ImportPipelineError(FileErrorCode.EMPTY_FILE, 'Import file contained no records');
+      throw new ImportServiceError(FileErrorCode.EMPTY_FILE, 'Import file contained no records');
     }
 
     await generateErrorReport();
 
-    const status: JobStatus = errorCount > 0 ? 'partial' : 'succeeded';
+    let status: JobStatus;
+    if (errorCount === 0) {
+      status = 'succeeded';
+    } else if (successCount > 0) {
+      status = 'partial';
+    } else {
+      status = 'failed';
+    }
     const finishedAt = now();
     await finalizeJob(prisma, jobId, {
       status,
@@ -425,19 +457,19 @@ function detectFormat(format: string | null, fileName: string): FileFormat {
     return 'json';
   }
 
-  throw new ImportPipelineError(FileErrorCode.UNSUPPORTED_FORMAT, 'Unsupported import format');
+  throw new ImportServiceError(FileErrorCode.UNSUPPORTED_FORMAT, 'Unsupported import format');
 }
 
 function normalizeEntityType(resource: string): EntityType {
   if (resource === 'users' || resource === 'articles' || resource === 'comments') {
     return resource;
   }
-  throw new ImportPipelineError(ResourceErrorCode.UNSUPPORTED_RESOURCE, `Unsupported resource ${resource}`);
+  throw new ImportServiceError(ResourceErrorCode.UNSUPPORTED_RESOURCE, `Unsupported resource ${resource}`);
 }
 
 async function openImportSource(sourceLocation: string | null): Promise<Readable> {
   if (!sourceLocation) {
-    throw new ImportPipelineError(FileErrorCode.FILE_READ_ERROR, 'Import source location missing');
+    throw new ImportServiceError(FileErrorCode.FILE_READ_ERROR, 'Import source location missing');
   }
 
   const storage = createImportStorageAdapter();
@@ -450,7 +482,7 @@ async function openImportSource(sourceLocation: string | null): Promise<Readable
     return createReadStream(localCandidate);
   }
 
-  throw new ImportPipelineError(FileErrorCode.FILE_READ_ERROR, 'Import source file not found');
+  throw new ImportServiceError(FileErrorCode.FILE_READ_ERROR, 'Import source file not found');
 }
 
 
@@ -552,11 +584,11 @@ function normalizePipelineError(error: unknown): {
     };
   }
 
-  if (error instanceof ImportExportError || error instanceof ImportPipelineError) {
+  if (error instanceof ImportExportError || error instanceof ImportServiceError) {
     return {
       code: error.code,
       message: error.message,
-      details: error instanceof ImportPipelineError ? error.details : undefined,
+      details: error instanceof ImportServiceError ? error.details : undefined,
     };
   }
 
@@ -619,4 +651,236 @@ function buildErrorSummary(
     reportFormat: errorReportFormat,
     reportGenerationFailed,
   };
+}
+
+export function getImportPayload(body: unknown): ImportCreatePayload {
+  const candidate = isObject(body) && 'import' in body ? (body as Record<string, unknown>).import : body;
+  if (!isObject(candidate)) {
+    return {};
+  }
+  return candidate as ImportCreatePayload;
+}
+
+export async function createImportJob(options: CreateImportJobOptions): Promise<CreateImportJobResult> {
+  const prisma = options.prisma ?? prismaClient;
+  const resource = parseEntityType(options.payload.resource);
+  const idempotencyKey = options.idempotencyKey ?? null;
+
+  if (idempotencyKey) {
+    const existing = await prisma.importJob.findFirst({
+      where: { createdById: options.createdById, idempotencyKey, resource },
+    });
+
+    if (existing) {
+      return { statusCode: 200, importJob: serializeImportJob(existing) };
+    }
+  }
+
+  const intake = await resolveImportIntake(options.file, options.payload);
+  const format = resolveImportFormat(options.payload.format, intake.fileName);
+
+  const created = await prisma.importJob.create({
+    data: {
+      status: 'queued',
+      resource,
+      format,
+      sourceType: intake.sourceType,
+      sourceLocation: intake.location,
+      fileName: intake.fileName,
+      fileSize: intake.bytes,
+      idempotencyKey,
+      createdById: options.createdById,
+      requestHash: null,
+    },
+  });
+
+  const { enqueueImportJob } = await import('../../jobs/import-export.queue');
+  await enqueueImportJob({
+    jobId: created.id,
+    resource: created.resource,
+    format: created.format,
+  });
+
+  return { statusCode: 202, importJob: serializeImportJob(created) };
+}
+
+export async function getImportJobStatus(options: GetImportJobStatusOptions) {
+  const prisma = options.prisma ?? prismaClient;
+  const job = await prisma.importJob.findFirst({
+    where: { id: options.jobId, createdById: options.createdById },
+  });
+
+  if (!job) {
+    throw new HttpException(404, { errors: { job: ['import job not found'] } });
+  }
+
+  const previewLimit = parsePositiveInteger(options.errorPreviewLimit, 20, 100, 'errorPreviewLimit');
+  const errorsPreview = await prisma.importError.findMany({
+    where: { jobId: job.id },
+    orderBy: { recordIndex: 'asc' },
+    take: previewLimit,
+  });
+
+  const errorSummary = toJsonObject(job.errorSummary);
+  const persistedErrorCount =
+    typeof errorSummary?.persistedErrorCount === 'number' ? errorSummary.persistedErrorCount : null;
+  const reportLocation =
+    typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : null;
+  const errorReportStatus =
+    typeof errorSummary?.reportStatus === 'string' ? (errorSummary.reportStatus as string) : undefined;
+  const totalErrorCount = persistedErrorCount ?? job.errorCount;
+
+  return {
+    importJob: serializeImportJob(job),
+    errorsPreview: errorsPreview.map(serializeImportError),
+    errorsPreviewCount: errorsPreview.length,
+    hasMoreErrors: totalErrorCount > errorsPreview.length,
+    errorReportUrl: reportLocation ? buildImportErrorReportDownloadUrl(job.id) : undefined,
+    errorReportStatus,
+  };
+}
+
+export async function getErrorReportFileMetadata(
+  options: GetErrorReportFileOptions,
+): Promise<ErrorReportFileMetadata> {
+  const prisma = options.prisma ?? prismaClient;
+  const job = await prisma.importJob.findFirst({
+    where: { id: options.jobId, createdById: options.createdById },
+  });
+
+  if (!job) {
+    throw new HttpException(404, { errors: { job: ['import job not found'] } });
+  }
+
+  const errorSummary = toJsonObject(job.errorSummary);
+  const reportLocation =
+    typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : null;
+  const reportStatus =
+    typeof errorSummary?.reportStatus === 'string' ? (errorSummary.reportStatus as string) : undefined;
+  const reportFormat = typeof errorSummary?.reportFormat === 'string' ? errorSummary.reportFormat : null;
+
+  if (!reportLocation) {
+    throw new HttpException(404, { errors: { job: ['import error report not found'] } });
+  }
+
+  if (reportStatus === 'failed') {
+    throw new HttpException(409, { errors: { job: ['import error report is not available'] } });
+  }
+
+  const format = reportFormat === 'json' ? 'json' : 'ndjson';
+  const extension = format === 'json' ? 'json' : 'ndjson';
+
+  return {
+    reportLocation,
+    contentType: format === 'json' ? 'application/json' : 'application/x-ndjson',
+    contentDisposition: `attachment; filename="${job.id}-errors.${extension}"`,
+  };
+}
+
+export function serializeImportError(error: {
+  id: string;
+  recordIndex: number;
+  recordId: string | null;
+  errorCode: number;
+  errorName: string;
+  message: string;
+  field: string | null;
+  value: Prisma.JsonValue | null;
+  details: Prisma.JsonValue | null;
+  createdAt: Date;
+}) {
+  return {
+    id: error.id,
+    recordIndex: error.recordIndex,
+    recordId: error.recordId,
+    errorCode: error.errorCode,
+    errorName: error.errorName,
+    message: error.message,
+    field: error.field,
+    value: error.value,
+    details: error.details,
+    createdAt: error.createdAt,
+  };
+}
+
+export function serializeImportJob(job: {
+  id: string;
+  status: string;
+  resource: string;
+  format: string;
+  totalRecords: number | null;
+  processedRecords: number;
+  successCount: number;
+  errorCount: number;
+  createdAt: Date;
+  startedAt: Date | null;
+  finishedAt: Date | null;
+  fileName: string | null;
+  fileSize: number | null;
+  sourceLocation: string | null;
+  idempotencyKey: string | null;
+  errorSummary?: Prisma.JsonValue | null;
+}) {
+  return {
+    id: job.id,
+    status: job.status,
+    entityType: job.resource,
+    format: job.format,
+    totalRecords: job.totalRecords,
+    processedRecords: job.processedRecords,
+    successCount: job.successCount,
+    errorCount: job.errorCount,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    completedAt: job.finishedAt,
+    createdBy: undefined,
+    idempotencyKey: job.idempotencyKey,
+    fileName: job.fileName,
+    fileSize: job.fileSize,
+    sourceUrl: job.sourceLocation,
+    errorSummary: sanitizeImportErrorSummary(job.errorSummary),
+  };
+}
+
+async function resolveImportIntake(file: UploadedFile | undefined, payload: ImportCreatePayload): Promise<ImportIntakeResult> {
+  if (file) {
+    await validateUploadedFile(file);
+    return mapUploadedFileToImportIntakeResult(file);
+  }
+
+  if (typeof payload.url === 'string' && payload.url.trim().length > 0) {
+    return fetchRemoteImport({ url: payload.url.trim() });
+  }
+
+  throw new HttpException(422, {
+    errors: { source: ['file upload or url is required'] },
+  });
+}
+
+function resolveImportFormat(rawFormat: string | undefined, fileName: string) {
+  if (rawFormat) {
+    return parseFormat(rawFormat);
+  }
+  const ext = fileName.toLowerCase().split('.').pop();
+  return ext === 'json' ? 'json' : 'ndjson';
+}
+
+function sanitizeImportErrorSummary(
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, unknown> | null {
+  const summary = toJsonObject(value);
+  if (!summary) {
+    return null;
+  }
+
+  // Exclude reportLocation from the summary returned by the API to avoid exposing internal storage details.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { reportLocation, ...safeSummary } = summary;
+  return safeSummary;
+}
+
+function buildImportErrorReportDownloadUrl(jobId: string): string {
+  const baseUrl = process.env.IMPORT_ERROR_REPORT_DOWNLOAD_BASE_URL?.replace(/\/$/, '');
+  const pathSuffix = `/api/v1/imports/${jobId}/errors/download`;
+  return baseUrl ? `${baseUrl}${pathSuffix}` : pathSuffix;
 }

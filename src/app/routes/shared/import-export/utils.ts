@@ -86,9 +86,11 @@ export function getQueryParamValue(value: unknown): string | undefined {
   if (typeof value === 'string') {
     return value;
   }
+
   if (Array.isArray(value) && value.length > 0) {
     return String(value[0]);
   }
+
   return undefined;
 }
 
