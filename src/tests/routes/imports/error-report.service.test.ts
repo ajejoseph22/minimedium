@@ -1,49 +1,12 @@
 import prismaMock from '../../prisma-mock';
 import { generateImportErrorReport } from '../../../app/routes/imports/error-report.service';
-import { StorageAdapter } from '../../../app/storage';
+import { createMemoryStorageAdapter } from '../../helpers/memory-storage';
 
 const prisma = prismaMock as unknown as any;
 
-type StoredStream = { key: string; data: string };
-
-const createMemoryStorage = () => {
-  const stored: StoredStream[] = [];
-
-  const storage: StorageAdapter = {
-    async saveStream(key, stream) {
-      const chunks: Buffer[] = [];
-      await new Promise<void>((resolve, reject) => {
-        stream.on('data', (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-        });
-        stream.on('end', () => resolve());
-        stream.on('error', (error) => reject(error));
-      });
-      const data = Buffer.concat(chunks).toString('utf8');
-      stored.push({ key, data });
-      return { key, bytes: Buffer.byteLength(data), location: `/tmp/${key}` };
-    },
-    async saveBuffer(key, data) {
-      stored.push({ key, data: data.toString('utf8') });
-      return { key, bytes: data.length, location: `/tmp/${key}` };
-    },
-    createReadStream() {
-      throw new Error('Not implemented for tests');
-    },
-    getLocalPath(key: string) {
-      return `/tmp/${key}`;
-    },
-    async delete() {
-      return;
-    },
-  };
-
-  return { storage, stored };
-};
-
 describe('Error Report Service', () => {
   it('should write NDJSON with one line per error', async () => {
-    const { storage, stored } = createMemoryStorage();
+    const { storage, savedFiles } = createMemoryStorageAdapter();
     prisma.importError.findMany
       .mockResolvedValueOnce([
         {
@@ -84,8 +47,8 @@ describe('Error Report Service', () => {
     expect(result.key).toBe('imports/job-1.ndjson');
     expect(result.format).toBe('ndjson');
     expect(result.errorCount).toBe(2);
-    expect(stored).toHaveLength(1);
-    const output = stored[0]?.data ?? '';
+    expect(savedFiles).toHaveLength(1);
+    const output = savedFiles[0]?.data ?? '';
     const lines = output.trim().split('\n');
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0] ?? '{}').recordIndex).toBe(0);
@@ -93,7 +56,7 @@ describe('Error Report Service', () => {
   });
 
   it('should write JSON array output when format is json', async () => {
-    const { storage, stored } = createMemoryStorage();
+    const { storage, savedFiles } = createMemoryStorageAdapter();
     prisma.importError.findMany
       .mockResolvedValueOnce([
         {
@@ -120,14 +83,14 @@ describe('Error Report Service', () => {
 
     expect(result.format).toBe('json');
     expect(result.errorCount).toBe(1);
-    expect(stored).toHaveLength(1);
-    const parsed = JSON.parse(stored[0]?.data ?? '[]');
+    expect(savedFiles).toHaveLength(1);
+    const parsed = JSON.parse(savedFiles[0]?.data ?? '[]');
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed[0]?.recordIndex).toBe(5);
   });
 
   it('should paginate results and preserve order across pages', async () => {
-    const { storage, stored } = createMemoryStorage();
+    const { storage, savedFiles } = createMemoryStorageAdapter();
     prisma.importError.findMany
       .mockResolvedValueOnce([
         {
@@ -167,7 +130,7 @@ describe('Error Report Service', () => {
     });
 
     expect(result.errorCount).toBe(2);
-    const output = stored[0]?.data ?? '';
+    const output = savedFiles[0]?.data ?? '';
     const lines = output.trim().split('\n');
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0] ?? '{}').recordIndex).toBe(0);

@@ -1,6 +1,7 @@
 import prismaMock from '../../prisma-mock';
 import { streamExportRecords, runExportJob } from '../../../app/routes/exports/export.service';
-import { StorageAdapter } from '../../../app/storage';
+import { logJobLifecycleEvent } from '../../../app/routes/shared/import-export/observability';
+import { createMemoryStorageAdapter } from '../../helpers/memory-storage';
 
 jest.mock('../../../app/routes/exports/config', () => ({
   loadExportConfig: () => ({
@@ -15,44 +16,12 @@ jest.mock('../../../app/routes/exports/config', () => ({
   }),
 }));
 
+jest.mock('../../../app/routes/shared/import-export/observability', () => ({
+  logJobLifecycleEvent: jest.fn(),
+}));
+
 const prisma: any = prismaMock;
-
-function createMemoryStorage() {
-  const saved: Array<{ key: string; data: string; bytes: number; location: string }> = [];
-  const saveStream = jest.fn(async (key: string, stream: NodeJS.ReadableStream) => {
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      stream.on('data', (chunk) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-      });
-      stream.on('end', () => resolve());
-      stream.on('close', () => resolve());
-      stream.on('error', (error) => reject(error));
-    });
-    const data = Buffer.concat(chunks).toString('utf8');
-    const bytes = Buffer.byteLength(data);
-    const result = { key, data, bytes, location: `/tmp/${key}` };
-    saved.push(result);
-    return { key, bytes, location: result.location };
-  });
-  const deleteFile = jest.fn(async () => undefined);
-
-  const storage: StorageAdapter = {
-    saveStream,
-    saveBuffer: async (key: string, data: Buffer) => ({
-      key,
-      bytes: data.length,
-      location: `/tmp/${key}`,
-    }),
-    createReadStream: () => {
-      throw new Error('Not implemented for this test');
-    },
-    getLocalPath: (key: string) => `/tmp/${key}`,
-    delete: deleteFile,
-  };
-
-  return { storage, saved, saveStream, deleteFile };
-}
+const logJobLifecycleEventMock = logJobLifecycleEvent as jest.MockedFunction<typeof logJobLifecycleEvent>;
 
 describe('Export Service', () => {
   it('should stream, at most, the requested limit', async () => {
@@ -185,8 +154,12 @@ describe('runExportJob', () => {
   const fixedNow = new Date('2026-02-06T10:00:00.000Z');
   const now = () => fixedNow;
 
+  beforeEach(() => {
+    logJobLifecycleEventMock.mockClear();
+  });
+
   it('should export NDJSON, persist metadata, and set download URL on success', async () => {
-    const { storage, saved } = createMemoryStorage();
+    const { storage, savedFiles } = createMemoryStorageAdapter();
     prisma.exportJob.findUnique.mockResolvedValueOnce({
       id: 'job-1',
       status: 'queued',
@@ -221,9 +194,9 @@ describe('runExportJob', () => {
 
     expect(result.status).toBe('succeeded');
     expect(result.processedRecords).toBe(1);
-    expect(saved).toHaveLength(1);
-    expect(saved[0]?.data).toContain('"email":"first@example.com"');
-    expect(saved[0]?.data).toContain('\n');
+    expect(savedFiles).toHaveLength(1);
+    expect(savedFiles[0]?.data).toContain('"email":"first@example.com"');
+    expect(savedFiles[0]?.data).toContain('\n');
     expect(prisma.exportJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'job-1' },
@@ -238,10 +211,38 @@ describe('runExportJob', () => {
         }),
       }),
     );
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.started',
+        jobKind: 'export',
+        jobId: 'job-1',
+        status: 'running',
+        counters: expect.objectContaining({
+          processedRecords: 0,
+          errorCount: 0,
+        }),
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId: 'job-1',
+        status: 'succeeded',
+        jobStartedAt: expect.any(Date),
+        counters: expect.objectContaining({
+          processedRecords: 1,
+          errorCount: 0,
+        }),
+      }),
+    );
   });
 
   it('should export JSON array output when format is json', async () => {
-    const { storage, saved } = createMemoryStorage();
+    const { storage, savedFiles } = createMemoryStorageAdapter();
     prisma.exportJob.findUnique.mockResolvedValueOnce({
       id: 'job-2',
       status: 'queued',
@@ -274,9 +275,9 @@ describe('runExportJob', () => {
       cancelCheckInterval: 0,
     });
 
-    expect(saved).toHaveLength(1);
-    expect(saved[0]?.data.startsWith('[')).toBe(true);
-    expect(saved[0]?.data.endsWith(']')).toBe(true);
+    expect(savedFiles).toHaveLength(1);
+    expect(savedFiles[0]?.data.startsWith('[')).toBe(true);
+    expect(savedFiles[0]?.data.endsWith(']')).toBe(true);
   });
 
   it('should return cancelled immediately when job is already cancelled', async () => {
@@ -311,10 +312,21 @@ describe('runExportJob', () => {
         }),
       }),
     );
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(1);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId: 'job-3',
+        status: 'cancelled',
+        jobStartedAt: expect.any(Date),
+      }),
+    );
   });
 
   it('should cancel during processing, delete output, and mark cancelled', async () => {
-    const { storage, deleteFile } = createMemoryStorage();
+    const { storage, deleteMock } = createMemoryStorageAdapter();
     prisma.exportJob.findUnique
       .mockResolvedValueOnce({
         id: 'job-4',
@@ -354,7 +366,7 @@ describe('runExportJob', () => {
       processedRecords: 1,
       fileSize: null,
     });
-    expect(deleteFile).toHaveBeenCalledWith('job-4.ndjson');
+    expect(deleteMock).toHaveBeenCalledWith('job-4.ndjson');
     expect(prisma.exportJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'job-4' },
@@ -365,10 +377,34 @@ describe('runExportJob', () => {
         }),
       }),
     );
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.started',
+        jobKind: 'export',
+        jobId: 'job-4',
+        status: 'running',
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId: 'job-4',
+        status: 'cancelled',
+        jobStartedAt: expect.any(Date),
+        counters: expect.objectContaining({
+          processedRecords: 1,
+          errorCount: 0,
+        }),
+      }),
+    );
   });
 
   it('should mark failed and cleanup output when export stream fails', async () => {
-    const { storage, deleteFile } = createMemoryStorage();
+    const { storage, deleteMock } = createMemoryStorageAdapter();
     prisma.exportJob.findUnique.mockResolvedValueOnce({
       id: 'job-5',
       status: 'queued',
@@ -379,7 +415,7 @@ describe('runExportJob', () => {
       format: 'ndjson',
       outputLocation: null,
     });
-    prisma.user.findMany.mockRejectedValueOnce(new Error('database exploded'));
+    prisma.user.findMany.mockRejectedValueOnce(new Error('database crashed'));
 
     await expect(
       runExportJob('job-5', {
@@ -388,9 +424,9 @@ describe('runExportJob', () => {
         now,
         cancelCheckInterval: 0,
       })
-    ).rejects.toThrow('database exploded');
+    ).rejects.toThrow('database crashed');
 
-    expect(deleteFile).toHaveBeenCalledWith('job-5.ndjson');
+    expect(deleteMock).toHaveBeenCalledWith('job-5.ndjson');
     expect(prisma.exportJob.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'job-5' },
@@ -398,6 +434,34 @@ describe('runExportJob', () => {
           status: 'failed',
           processedRecords: 0,
           totalRecords: 0,
+        }),
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.started',
+        jobKind: 'export',
+        jobId: 'job-5',
+        status: 'running',
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId: 'job-5',
+        status: 'failed',
+        level: 'error',
+        jobStartedAt: expect.any(Date),
+        counters: expect.objectContaining({
+          processedRecords: 0,
+          errorCount: 1,
+        }),
+        details: expect.objectContaining({
+          message: 'database crashed',
         }),
       }),
     );

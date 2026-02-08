@@ -2,27 +2,7 @@ import { Readable } from 'stream';
 import prismaMock from '../../prisma-mock';
 import { runImportJob } from '../../../app/routes/imports/import.service';
 import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
-
-jest.mock('../../../app/routes/imports/config', () => ({
-  loadImportConfig: () => ({
-    maxRecords: 100,
-    batchSize: 1,
-    workerConcurrency: 4,
-    maxFileSize: 1024 * 1024 * 1024,
-    allowedHosts: [],
-    errorReportStoragePath: './import-errors',
-    importStoragePath: './imports',
-    importRateLimitPerHour: 10,
-    importConcurrentLimitUser: 2,
-    importConcurrentLimitGlobal: 10,
-  }),
-}));
-
-jest.mock('../../../app/storage', () => ({
-  createImportStorageAdapter: () => ({
-    getLocalPath: (input: string) => input,
-  }),
-}));
+import { logJobLifecycleEvent } from '../../../app/routes/shared/import-export/observability';
 
 jest.mock('fs', () => ({
   createReadStream: jest.fn(() => new Readable({ read() { this.push(null); } })),
@@ -58,13 +38,22 @@ jest.mock('../../../app/routes/imports/error-report.service', () => ({
   }),
 }));
 
+jest.mock('../../../app/routes/shared/import-export/observability', () => ({
+  logJobLifecycleEvent: jest.fn(),
+}));
+
 import { parseJsonArrayStream } from '../../../app/routes/imports/parsing.service';
 import { validateImportRecord } from '../../../app/routes/imports/validation/validation.service';
 import { upsertImportRecords } from '../../../app/routes/imports/upsert.service';
 
-const prisma = prismaMock as unknown as any;
+const prisma: any = prismaMock;
+const logJobLifecycleEventMock = logJobLifecycleEvent as jest.MockedFunction<typeof logJobLifecycleEvent>;
 
 describe('Import Service', () => {
+  beforeEach(() => {
+    logJobLifecycleEventMock.mockClear();
+  });
+
   it('should count distinct records with errors', async () => {
     prisma.importJob.findUnique.mockResolvedValue({
       id: 'job-1',
@@ -129,5 +118,89 @@ describe('Import Service', () => {
     expect(result.errorCount).toBe(2);
     expect(prisma.importError.createMany).toHaveBeenCalledTimes(1);
     expect(prisma.importError.createMany.mock.calls[0][0].data).toHaveLength(2);
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.started',
+        jobKind: 'import',
+        jobId: 'job-1',
+        status: 'running',
+        counters: expect.objectContaining({
+          processedRecords: 0,
+          successCount: 0,
+          errorCount: 0,
+        }),
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'import',
+        jobId: 'job-1',
+        status: 'partial',
+        jobStartedAt: expect.any(Date),
+        counters: expect.objectContaining({
+          processedRecords: 2,
+          successCount: 0,
+          errorCount: 2,
+        }),
+      }),
+    );
+  });
+
+  it('should log failed completion with metrics when import processing throws', async () => {
+    prisma.importJob.findUnique.mockResolvedValue({
+      id: 'job-failed',
+      status: 'queued',
+      resource: 'users',
+      format: 'json',
+      fileName: 'input.json',
+      sourceLocation: '/tmp/input.json',
+      processedRecords: 0,
+      successCount: 0,
+      errorCount: 0,
+      startedAt: null,
+    });
+    prisma.importJob.update.mockResolvedValue({});
+    prisma.importError.createMany.mockResolvedValue({ count: 1 });
+
+    (parseJsonArrayStream as jest.Mock).mockImplementation(async function* () {
+      throw new Error('some error');
+    });
+
+    const result = await runImportJob('job-failed', { prisma, cancelCheckInterval: 0 });
+
+    expect(result.status).toBe('failed');
+    expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        event: 'job.started',
+        jobKind: 'import',
+        jobId: 'job-failed',
+        status: 'running',
+      }),
+    );
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'import',
+        jobId: 'job-failed',
+        status: 'failed',
+        level: 'error',
+        jobStartedAt: expect.any(Date),
+        counters: expect.objectContaining({
+          processedRecords: 0,
+          successCount: 0,
+          errorCount: 0,
+        }),
+        details: expect.objectContaining({
+          message: 'some error',
+        }),
+      }),
+    );
   });
 });
