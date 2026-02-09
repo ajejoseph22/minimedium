@@ -1,6 +1,6 @@
 # MiniMedium API (Import/Export Module)
 
-Node.js + Express + Prisma API with BullMQ background workers for large async imports/exports.
+Production-grade Node.js (TypeScript + Express) system backed by PostgreSQL and BullMQ workers for high-volume import/export workflows.
 
 The codebase uses [the RealWorld Node + Express starter](https://github.com/gothinkster/node-express-realworld-example-app) as its boilerplate/template.
 
