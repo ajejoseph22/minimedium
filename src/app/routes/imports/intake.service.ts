@@ -44,13 +44,7 @@ export interface ImportIntakeResult {
   sourceUrl?: string;
 }
 
-export interface UploadedFile {
-  filename: string;
-  path: string;
-  originalname: string;
-  mimetype: string;
-  size: number;
-}
+export type UploadedFile = Express.Multer.File;
 
 export interface RemoteFetchOptions {
   url: string;
