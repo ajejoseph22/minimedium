@@ -38,14 +38,13 @@ export interface CreateImportJobOptions {
   createdById: number;
   payload: ImportCreatePayload;
   file?: UploadedFile;
-  idempotencyKey?: string | null;
+  idempotencyKey: string;
   prisma?: PrismaClient;
 }
 
 export interface GetImportJobStatusOptions {
   jobId: string;
   createdById: number;
-  errorPreviewLimit?: string;
   prisma?: PrismaClient;
 }
 

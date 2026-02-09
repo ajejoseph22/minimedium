@@ -1,6 +1,7 @@
 import prismaMock from '../../prisma-mock';
 import { generateImportErrorReport } from '../../../app/routes/imports/error-report.service';
 import { createMemoryStorageAdapter } from '../../helpers/memory-storage';
+import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
 
 const prisma = prismaMock as unknown as any;
 
@@ -13,7 +14,7 @@ describe('Error Report Service', () => {
           id: 'err-1',
           recordIndex: 0,
           recordId: 'user@example.com',
-          errorCode: 1003,
+          errorCode: ValidationErrorCode.INVALID_FIELD_FORMAT,
           errorName: 'INVALID_FIELD_FORMAT',
           message: 'Invalid email',
           field: 'email',
@@ -25,7 +26,7 @@ describe('Error Report Service', () => {
           id: 'err-2',
           recordIndex: 1,
           recordId: '2',
-          errorCode: 1007,
+          errorCode: ValidationErrorCode.DUPLICATE_VALUE,
           errorName: 'DUPLICATE_VALUE',
           message: 'Duplicate email',
           field: 'email',
@@ -63,7 +64,7 @@ describe('Error Report Service', () => {
           id: 'err-1',
           recordIndex: 5,
           recordId: 'abc',
-          errorCode: 1001,
+          errorCode: ValidationErrorCode.MISSING_REQUIRED_FIELD,
           errorName: 'MISSING_REQUIRED_FIELD',
           message: 'Missing id',
           field: 'id',
@@ -97,7 +98,7 @@ describe('Error Report Service', () => {
           id: 'err-1',
           recordIndex: 0,
           recordId: 'a',
-          errorCode: 1003,
+          errorCode: ValidationErrorCode.INVALID_FIELD_FORMAT,
           errorName: 'INVALID_FIELD_FORMAT',
           message: 'Bad',
           field: 'email',
@@ -111,7 +112,7 @@ describe('Error Report Service', () => {
           id: 'err-2',
           recordIndex: 1,
           recordId: 'b',
-          errorCode: 1003,
+          errorCode: ValidationErrorCode.INVALID_FIELD_FORMAT,
           errorName: 'INVALID_FIELD_FORMAT',
           message: 'Bad',
           field: 'email',

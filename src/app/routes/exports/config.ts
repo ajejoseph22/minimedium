@@ -8,6 +8,7 @@ import {
 
 interface ExportConfig extends SharedImportExportConfig {
   batchSize: number;
+  exportMaxRecords: number;
   fileRetentionHours: number;
   exportStoragePath: string;
   exportStreamMaxLimit: number;
@@ -18,6 +19,7 @@ interface ExportConfig extends SharedImportExportConfig {
 
 export const DEFAULT_EXPORT_CONFIG: Omit<ExportConfig, 'workerConcurrency'> = {
   batchSize: 1000,
+  exportMaxRecords: 1000000,
   fileRetentionHours: 24,
   exportStoragePath: './exports',
   exportStreamMaxLimit: 1000,
@@ -31,6 +33,8 @@ export function loadExportConfig(): ExportConfig {
   return {
     batchSize:
       parseInt(process.env.EXPORT_BATCH_SIZE || '', 10) || DEFAULT_EXPORT_CONFIG.batchSize,
+    exportMaxRecords:
+      parseInt(process.env.EXPORT_MAX_RECORDS || '', 10) || DEFAULT_EXPORT_CONFIG.exportMaxRecords,
     workerConcurrency:
       shared.workerConcurrency || DEFAULT_SHARED_IMPORT_EXPORT_CONFIG.workerConcurrency,
     fileRetentionHours:

@@ -2,6 +2,8 @@ import { createReadStream } from 'fs';
 import { once } from 'events';
 import { NextFunction, Request, Response, Router } from 'express';
 import HttpException from '../../models/http-exception.model';
+import { HttpStatusCode } from '../../models/http-status-code.model';
+import { createLogger } from '../../logger';
 import auth from '../auth/auth';
 import { AuthenticatedRequest, getIdempotencyKey, requireUserId } from '../shared/import-export/utils';
 import {
@@ -15,6 +17,7 @@ import {
 } from './export.service';
 
 const router = Router();
+const logger = createLogger({ component: 'exports.controller' });
 
 router.get('/v1/exports/:jobId/download', auth.required, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -29,7 +32,7 @@ router.get('/v1/exports/:jobId/download', auth.required, async (req: Authenticat
 
     const stream = createReadStream(metadata.outputLocation);
     stream.on('error', () => {
-      next(new HttpException(404, { errors: { job: ['export artifact not found'] } }));
+      next(new HttpException(HttpStatusCode.NOT_FOUND, { errors: { job: ['export artifact not found'] } }));
     });
     stream.pipe(res);
   } catch (error) {
@@ -102,6 +105,8 @@ router.get('/v1/exports', auth.required, async (req: Request, res: Response, nex
       format: parsed.format,
       limit: parsed.limit,
       cursor: parsed.cursor,
+      filters: parsed.filters,
+      fields: parsed.fields,
       signal: abortController.signal,
       writeChunk,
       onRecord: (progress) => {
@@ -119,8 +124,15 @@ router.get('/v1/exports', auth.required, async (req: Request, res: Response, nex
       if (responseFormat === 'json' && isJsonStarted && !isJsonClosed) {
         try {
           res.write(buildExportStreamClosingChunk('json', count, limit, lastId));
-        } catch {
-          // Best effort only; response is ending anyway.
+        } catch (writeError) {
+          logger.debug({
+            event: 'Export stream JSON closing chunk write failed',
+            count,
+            limit,
+            lastId,
+            errorName: writeError instanceof Error ? writeError.name : 'UnknownError',
+            errorMessage: writeError instanceof Error ? writeError.message : String(writeError),
+          });
         }
       }
       res.end();

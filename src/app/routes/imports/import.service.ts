@@ -1,4 +1,4 @@
-import { createReadStream } from 'fs';
+import { createReadStream, promises as fs } from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
 import type { Prisma, PrismaClient } from '@prisma/client';
@@ -10,10 +10,10 @@ import {
   ImportExportError,
   mapUploadedFileToImportIntakeResult,
   UploadedFile,
-  validateUploadedFile,
+  validateUploadedFile
 } from './intake.service';
 import { ImportExportParseError, parseJsonArrayStream, parseNdjsonStream } from './parsing.service';
-import { upsertImportRecords, IndexedImportRecord } from './upsert.service';
+import { IndexedImportRecord, upsertImportRecords } from './upsert.service';
 import { validateImportRecord } from './validation/validation.service';
 import { createValidationCache } from './validation/validation.validators';
 import { generateImportErrorReport } from './error-report.service';
@@ -26,19 +26,19 @@ import {
   ImportExportErrorCode,
   ImportRecord,
   JobStatus,
+  ProcessingErrorCode,
   ResourceErrorCode,
-  SystemErrorCode,
+  SystemErrorCode
 } from '../shared/import-export/types';
-import {
-  logJobLifecycleEvent,
-} from '../../jobs/observability';
+import { logJobLifecycleEvent } from '../../jobs/observability';
+import { createLogger } from '../../logger';
 import {
   isObject,
+  isPrismaUniqueConstraintError,
   parseEntityType,
   parseFormat,
-  parsePositiveInteger,
   pathExists,
-  toJsonObject,
+  toJsonObject
 } from '../shared/import-export/utils';
 import type {
   CreateImportJobOptions,
@@ -50,12 +50,14 @@ import type {
   ImportIntakeResult,
   RecordErrorPayload,
   RunImportJobOptions,
-  RunImportJobResult,
+  RunImportJobResult
 } from './import.model';
 import HttpException from '../../models/http-exception.model';
+import { HttpStatusCode } from '../../models/http-status-code.model';
 
 const ERROR_FLUSH_SIZE = 500;
 const DEFAULT_CANCEL_CHECK_INTERVAL = 500;
+const logger = createLogger({ component: 'import.service' });
 
 class ImportServiceError extends Error {
   constructor(
@@ -175,8 +177,15 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
       const report = await generateImportErrorReport(jobId, { prisma, format: reportFormat });
       errorReportLocation = report.location;
       errorReportFormat = report.format;
-    } catch {
+    } catch (error) {
       errorReportGenerationFailed = true;
+      logger.warn({
+        event: 'Import error report generation failed',
+        jobId,
+        reportFormat,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -203,8 +212,15 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
     try {
       const result = await prisma.importError.createMany({ data: payload });
       persistedErrorCount += typeof result?.count === 'number' ? result.count : payload.length;
-    } catch {
+    } catch (error) {
       errorPersistenceFailures += payload.length;
+      logger.warn({
+        event: 'Import error persistence failed',
+        jobId,
+        batchSize: payload.length,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
     }
     pendingErrors = [];
   };
@@ -245,6 +261,7 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
 
   try {
     for await (const parsed of parser(inputStream, { maxRecords: config.maxRecords })) {
+      assertRecordShapeMatchesFormat(parsed.record, format, parsed.index, parsed.lineNumber);
       processedRecords += 1;
 
       const validation = await validateImportRecord(parsed.record, entityType, {
@@ -390,14 +407,12 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
 
     errorCount += addErrorRecordIndexes([fatalError]);
 
-    try {
-      const result = await prisma.importError.createMany({
-        data: [buildImportErrorPayload(fatalError.error, fatalError.recordId, fatalError.details)],
-      });
-      persistedErrorCount += typeof result?.count === 'number' ? result.count : 1;
-    } catch {
+    const fatalPayload = buildImportErrorPayload(fatalError.error, fatalError.recordId, fatalError.details);
+    const fatalPersisted = await persistFatalImportError(prisma, fatalPayload, jobId);
+    if (fatalPersisted) {
+      persistedErrorCount += 1;
+    } else {
       errorPersistenceFailures += 1;
-      // swallow to ensure job status is updated even if error persistence fails
     }
 
     await generateErrorReport();
@@ -416,6 +431,11 @@ export async function runImportJob(jobId: string, options: RunImportJobOptions =
         errorReportLocation,
         errorReportFormat,
         errorReportGenerationFailed,
+        {
+          code,
+          message,
+          details,
+        },
       ),
     });
     logJobLifecycleEvent({
@@ -490,9 +510,11 @@ async function openImportSource(sourceLocation: string | null): Promise<Readable
 function buildImportErrorPayload(
   error: CreateRecordErrorOptions,
   recordId: string | null,
-  details?: Prisma.InputJsonValue | null,
+  details?: Prisma.InputJsonValue,
 ): Prisma.ImportErrorCreateManyInput {
-  const errorName = ErrorCodeNames[error.errorCode as ImportExportErrorCode] ?? 'UNKNOWN';
+  const errorName =
+    ErrorCodeNames[error.errorCode as ImportExportErrorCode] ?? 'UNKNOWN';
+
   return {
     jobId: error.jobId,
     recordIndex: error.recordIndex,
@@ -500,8 +522,8 @@ function buildImportErrorPayload(
     errorCode: error.errorCode,
     errorName,
     message: error.message,
-    field: error.field ?? null,
-    value: (error.value ?? null) as Prisma.InputJsonValue,
+    ...(error.field && { field: error.field }),
+    ...(error.value && { value: error.value as Prisma.InputJsonValue }),
     details: details ?? undefined,
   };
 }
@@ -542,6 +564,39 @@ async function markJobCancelled(prisma: PrismaClient, jobId: string, timestamp: 
       finishedAt: timestamp,
     },
   });
+}
+
+async function persistFatalImportError(
+  prisma: PrismaClient,
+  payload: Prisma.ImportErrorCreateManyInput,
+  jobId: string,
+): Promise<boolean> {
+  try {
+    const result = await prisma.importError.createMany({ data: [payload] });
+    return (typeof result?.count === 'number' ? result.count : 1) > 0;
+  } catch (error) {
+    logger.warn({
+      event: 'Failed to persist bulk import fatal error',
+      jobId,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    await prisma.importError.create({
+      data: payload,
+    });
+    return true;
+  } catch (error) {
+    logger.warn({
+      event: "Failed to persist import fatal error'",
+      jobId,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
 }
 
 async function finalizeJob(
@@ -607,6 +662,42 @@ function normalizePipelineError(error: unknown): {
   };
 }
 
+function assertRecordShapeMatchesFormat(
+  record: unknown,
+  format: FileFormat,
+  recordIndex: number,
+  lineNumber?: number,
+): void {
+  if (format !== 'ndjson') {
+    return;
+  }
+
+  const isObjectRecord = typeof record === 'object' && record !== null && !Array.isArray(record);
+  if (isObjectRecord) {
+    return;
+  }
+
+  throw new ImportServiceError(
+    ProcessingErrorCode.INVALID_RECORD_STRUCTURE,
+    'NDJSON records must be JSON objects.',
+    {
+      recordIndex,
+      lineNumber,
+      actualType: describeJsonType(record),
+    } as Prisma.InputJsonValue,
+  );
+}
+
+function describeJsonType(value: unknown): string {
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+  if (value === null) {
+    return 'null';
+  }
+  return typeof value;
+}
+
 async function safeFlushErrors(
   pendingErrors: RecordErrorPayload[],
   prisma: PrismaClient,
@@ -622,9 +713,14 @@ async function safeFlushErrors(
     );
     const result = await prisma.importError.createMany({ data: payload });
     handlers.onPersisted(typeof result?.count === 'number' ? result.count : payload.length);
-  } catch {
-    // ignore to avoid masking the primary failure
+  } catch (error) {
     handlers.onFailed(pendingErrors.length);
+    logger.warn({
+      event: 'Import pending error flush failed',
+      batchSize: pendingErrors.length,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -634,6 +730,11 @@ function buildErrorSummary(
   errorReportLocation: string | null,
   errorReportFormat: FileFormat | null,
   reportGenerationFailed: boolean,
+  lastError?: {
+    code: ImportExportErrorCode;
+    message: string;
+    details?: Prisma.InputJsonValue;
+  },
 ): Prisma.InputJsonValue {
   const reportStatus = reportGenerationFailed
     ? 'failed'
@@ -643,7 +744,7 @@ function buildErrorSummary(
         ? 'failed'
         : 'partial';
 
-  return {
+  const summary: Record<string, unknown> = {
     reportStatus,
     persistedErrorCount,
     persistenceFailures: errorPersistenceFailures,
@@ -651,6 +752,16 @@ function buildErrorSummary(
     reportFormat: errorReportFormat,
     reportGenerationFailed,
   };
+
+  if (lastError) {
+    summary.lastError = {
+      code: lastError.code,
+      message: lastError.message,
+      details: lastError.details ?? undefined,
+    };
+  }
+
+  return summary as Prisma.InputJsonValue;
 }
 
 export function getImportPayload(body: unknown): ImportCreatePayload {
@@ -664,41 +775,109 @@ export function getImportPayload(body: unknown): ImportCreatePayload {
 export async function createImportJob(options: CreateImportJobOptions): Promise<CreateImportJobResult> {
   const prisma = options.prisma ?? prismaClient;
   const resource = parseEntityType(options.payload.resource);
-  const idempotencyKey = options.idempotencyKey ?? null;
+  const idempotencyKey = options.idempotencyKey;
 
-  if (idempotencyKey) {
-    const existing = await prisma.importJob.findFirst({
-      where: { createdById: options.createdById, idempotencyKey, resource },
-    });
-
-    if (existing) {
-      return { statusCode: 200, importJob: serializeImportJob(existing) };
-    }
-  }
-
-  const intake = await resolveImportIntake(options.file, options.payload);
-  const format = resolveImportFormat(options.payload.format, intake.fileName);
-
-  const created = await prisma.importJob.create({
-    data: {
-      status: 'queued',
-      resource,
-      format,
-      sourceType: intake.sourceType,
-      sourceLocation: intake.location,
-      fileName: intake.fileName,
-      fileSize: intake.bytes,
-      idempotencyKey,
-      createdById: options.createdById,
-      requestHash: null,
-    },
+  const existing = await prisma.importJob.findFirst({
+    where: { createdById: options.createdById, idempotencyKey, resource },
   });
 
+  if (existing) {
+    logger.info({
+      event: 'Import request deduplicated',
+      jobId: existing.id,
+      userId: options.createdById,
+      resource,
+      status: existing.status,
+    });
+    return { statusCode: 200, importJob: serializeImportJob(existing) };
+  }
+
+  let intake: ImportIntakeResult;
+  try {
+    intake = await resolveImportIntake(options.file, options.payload);
+  } catch (error) {
+    throw mapImportCreateError(error);
+  }
+
+  let format: FileFormat;
+  try {
+    format = resolveImportFormat(options.payload.format, intake.fileName);
+  } catch (error) {
+    await cleanupImportIntake(intake);
+    throw error;
+  }
+
+  let created: Awaited<ReturnType<typeof prisma.importJob.create>>;
+  try {
+    created = await prisma.importJob.create({
+      data: {
+        status: 'queued',
+        resource,
+        format,
+        sourceType: intake.sourceType,
+        sourceLocation: intake.location,
+        fileName: intake.fileName,
+        fileSize: intake.bytes,
+        idempotencyKey,
+        createdById: options.createdById,
+        requestHash: null,
+      },
+    });
+  } catch (error) {
+    if (isPrismaUniqueConstraintError(error)) {
+      const existing = await prisma.importJob.findFirst({
+        where: { createdById: options.createdById, idempotencyKey, resource },
+      });
+
+      if (existing) {
+        await cleanupImportIntake(intake);
+        logger.info({
+          event: 'Import request deduplicated after create race',
+          jobId: existing.id,
+          userId: options.createdById,
+          resource,
+          status: existing.status,
+        });
+        return { statusCode: 200, importJob: serializeImportJob(existing) };
+      }
+    }
+
+    await cleanupImportIntake(intake);
+    throw error;
+  }
+
   const { enqueueImportJob } = await import('../../jobs/import-export.queue');
-  await enqueueImportJob({
+  try {
+    await enqueueImportJob({
+      jobId: created.id,
+      resource: created.resource,
+      format: created.format,
+    });
+  } catch (error) {
+    await markImportJobEnqueueFailed(prisma, created.id);
+    await cleanupImportIntake(intake);
+    logger.error({
+      event: 'Import job enqueue failed',
+      jobId: created.id,
+      userId: options.createdById,
+      resource: created.resource,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpException(HttpStatusCode.SERVICE_UNAVAILABLE, {
+      errors: { queue: ['failed to enqueue import job'] },
+    });
+  }
+
+  logger.info({
+    event: 'Import job queued',
     jobId: created.id,
+    userId: options.createdById,
     resource: created.resource,
     format: created.format,
+    sourceType: created.sourceType,
+    fileSize: created.fileSize,
+    hasIdempotencyKey: true,
   });
 
   return { statusCode: 202, importJob: serializeImportJob(created) };
@@ -711,30 +890,17 @@ export async function getImportJobStatus(options: GetImportJobStatusOptions) {
   });
 
   if (!job) {
-    throw new HttpException(404, { errors: { job: ['import job not found'] } });
+    throw new HttpException(HttpStatusCode.NOT_FOUND, { errors: { job: ['import job not found'] } });
   }
 
-  const previewLimit = parsePositiveInteger(options.errorPreviewLimit, 20, 100, 'errorPreviewLimit');
-  const errorsPreview = await prisma.importError.findMany({
-    where: { jobId: job.id },
-    orderBy: { recordIndex: 'asc' },
-    take: previewLimit,
-  });
-
   const errorSummary = toJsonObject(job.errorSummary);
-  const persistedErrorCount =
-    typeof errorSummary?.persistedErrorCount === 'number' ? errorSummary.persistedErrorCount : null;
   const reportLocation =
     typeof errorSummary?.reportLocation === 'string' ? (errorSummary.reportLocation as string) : null;
   const errorReportStatus =
     typeof errorSummary?.reportStatus === 'string' ? (errorSummary.reportStatus as string) : undefined;
-  const totalErrorCount = persistedErrorCount ?? job.errorCount;
 
   return {
     importJob: serializeImportJob(job),
-    errorsPreview: errorsPreview.map(serializeImportError),
-    errorsPreviewCount: errorsPreview.length,
-    hasMoreErrors: totalErrorCount > errorsPreview.length,
     errorReportUrl: reportLocation ? buildImportErrorReportDownloadUrl(job.id) : undefined,
     errorReportStatus,
   };
@@ -749,7 +915,7 @@ export async function getErrorReportFileMetadata(
   });
 
   if (!job) {
-    throw new HttpException(404, { errors: { job: ['import job not found'] } });
+    throw new HttpException(HttpStatusCode.NOT_FOUND, { errors: { job: ['import job not found'] } });
   }
 
   const errorSummary = toJsonObject(job.errorSummary);
@@ -760,11 +926,11 @@ export async function getErrorReportFileMetadata(
   const reportFormat = typeof errorSummary?.reportFormat === 'string' ? errorSummary.reportFormat : null;
 
   if (!reportLocation) {
-    throw new HttpException(404, { errors: { job: ['import error report not found'] } });
+    throw new HttpException(HttpStatusCode.NOT_FOUND, { errors: { job: ['import error report not found'] } });
   }
 
   if (reportStatus === 'failed') {
-    throw new HttpException(409, { errors: { job: ['import error report is not available'] } });
+    throw new HttpException(HttpStatusCode.CONFLICT, { errors: { job: ['import error report is not available'] } });
   }
 
   const format = reportFormat === 'json' ? 'json' : 'ndjson';
@@ -774,32 +940,6 @@ export async function getErrorReportFileMetadata(
     reportLocation,
     contentType: format === 'json' ? 'application/json' : 'application/x-ndjson',
     contentDisposition: `attachment; filename="${job.id}-errors.${extension}"`,
-  };
-}
-
-export function serializeImportError(error: {
-  id: string;
-  recordIndex: number;
-  recordId: string | null;
-  errorCode: number;
-  errorName: string;
-  message: string;
-  field: string | null;
-  value: Prisma.JsonValue | null;
-  details: Prisma.JsonValue | null;
-  createdAt: Date;
-}) {
-  return {
-    id: error.id,
-    recordIndex: error.recordIndex,
-    recordId: error.recordId,
-    errorCode: error.errorCode,
-    errorName: error.errorName,
-    message: error.message,
-    field: error.field,
-    value: error.value,
-    details: error.details,
-    createdAt: error.createdAt,
   };
 }
 
@@ -852,17 +992,45 @@ async function resolveImportIntake(file: UploadedFile | undefined, payload: Impo
     return fetchRemoteImport({ url: payload.url.trim() });
   }
 
-  throw new HttpException(422, {
+  throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
     errors: { source: ['file upload or url is required'] },
   });
 }
 
 function resolveImportFormat(rawFormat: string | undefined, fileName: string) {
+  const inferred = inferImportFormatFromFileName(fileName);
+
   if (rawFormat) {
-    return parseFormat(rawFormat);
+    const explicit = parseFormat(rawFormat);
+
+    if (inferred && explicit !== inferred) {
+      throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
+        errors: {
+          format: [
+            `format ${explicit} does not match file extension (${path.extname(fileName).toLowerCase()})`,
+          ],
+        },
+      });
+    }
+
+    return explicit;
   }
-  const ext = fileName.toLowerCase().split('.').pop();
-  return ext === 'json' ? 'json' : 'ndjson';
+
+  return inferred ?? 'ndjson';
+}
+
+function inferImportFormatFromFileName(fileName: string): FileFormat | null {
+  const ext = path.extname(fileName).toLowerCase();
+
+  if (ext === '.json') {
+    return 'json';
+  }
+
+  if (ext === '.ndjson' || ext === '.jsonl') {
+    return 'ndjson';
+  }
+
+  return null;
 }
 
 function sanitizeImportErrorSummary(
@@ -883,4 +1051,78 @@ function buildImportErrorReportDownloadUrl(jobId: string): string {
   const baseUrl = process.env.IMPORT_ERROR_REPORT_DOWNLOAD_BASE_URL?.replace(/\/$/, '');
   const pathSuffix = `/api/v1/imports/${jobId}/errors/download`;
   return baseUrl ? `${baseUrl}${pathSuffix}` : pathSuffix;
+}
+
+async function cleanupImportIntake(intake: ImportIntakeResult): Promise<void> {
+  if (!intake.location) {
+    return;
+  }
+
+  try {
+    await fs.rm(intake.location, { force: true });
+  } catch (error) {
+    logger.debug({
+      event: 'Import intake cleanup skipped',
+      intakePath: intake.location,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function markImportJobEnqueueFailed(prisma: PrismaClient, jobId: string): Promise<void> {
+  try {
+    await prisma.importJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'failed',
+        finishedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    logger.warn({
+      event: 'Import enqueue failure status update failed',
+      jobId,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function mapImportCreateError(error: unknown): HttpException {
+  if (error instanceof HttpException) {
+    return error;
+  }
+
+  if (error instanceof ImportExportError) {
+    switch (error.code) {
+      case FileErrorCode.FILE_TOO_LARGE:
+        return new HttpException(HttpStatusCode.PAYLOAD_TOO_LARGE, {
+          errors: { file: [error.message] },
+        });
+      case FileErrorCode.UNSUPPORTED_FORMAT:
+      case FileErrorCode.EMPTY_FILE:
+        return new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
+          errors: { file: [error.message] },
+        });
+      case FileErrorCode.URL_NOT_ALLOWED:
+        return new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
+          errors: { url: [error.message] },
+        });
+      case FileErrorCode.URL_FETCH_FAILED:
+      case FileErrorCode.FILE_READ_ERROR:
+      case FileErrorCode.FILE_WRITE_ERROR:
+        return new HttpException(HttpStatusCode.SERVICE_UNAVAILABLE, {
+          errors: { source: [error.message] },
+        });
+      default:
+        return new HttpException(HttpStatusCode.INTERNAL_SERVER_ERROR, {
+          errors: { import: ['import intake failed'] },
+        });
+    }
+  }
+
+  return new HttpException(HttpStatusCode.INTERNAL_SERVER_ERROR, {
+    errors: { import: ['import intake failed'] },
+  });
 }

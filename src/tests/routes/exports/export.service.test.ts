@@ -1,11 +1,19 @@
 import prismaMock from '../../prisma-mock';
-import { streamExportRecords, runExportJob } from '../../../app/routes/exports/export.service';
+import {
+  parseExportQuery,
+  runExportJob,
+  streamExportRecords,
+  streamExports,
+} from '../../../app/routes/exports/export.service';
 import { logJobLifecycleEvent } from '../../../app/jobs/observability';
 import { createMemoryStorageAdapter } from '../../helpers/memory-storage';
+import HttpException from '../../../app/models/http-exception.model';
+import { HttpStatusCode } from '../../../app/models/http-status-code.model';
 
 jest.mock('../../../app/routes/exports/config', () => ({
   loadExportConfig: () => ({
     batchSize: 1,
+    exportMaxRecords: 2,
     exportStreamMaxLimit: 2,
     workerConcurrency: 4,
     fileRetentionHours: 24,
@@ -148,6 +156,131 @@ describe('Export Service', () => {
 
     expect(records).toHaveLength(2);
   });
+
+  it('should parse and normalize streaming filters and fields from query params', () => {
+    const parsed = parseExportQuery({
+      resource: 'articles',
+      format: 'json',
+      limit: '2',
+      filters:
+        '{"status":"published","authorId":"13","publishedAt":{"gte":"2026-01-01T00:00:00Z"},"createdAt":{"lte":"2026-02-01T00:00:00Z"}}',
+      fields: 'id,slug,publishedAt',
+    });
+
+    expect(parsed.filters).toEqual({
+      status: 'published',
+      author_id: 13,
+      published_at: { gte: '2026-01-01T00:00:00Z' },
+      created_at: { lte: '2026-02-01T00:00:00Z' },
+    });
+    expect(Array.from(parsed.fields ?? [])).toEqual([
+      'id',
+      'slug',
+      'published_at',
+    ]);
+  });
+
+  it('should reject invalid filters JSON in streaming query params', () => {
+    expect(() =>
+      parseExportQuery({
+        resource: 'articles',
+        format: 'json',
+        filters: '{"status":"published"',
+      }),
+    ).toThrow(HttpException);
+
+    try {
+      parseExportQuery({
+        resource: 'articles',
+        format: 'json',
+        filters: '{"status":"published"',
+      });
+    } catch (error) {
+      const typedError = error as HttpException;
+      expect(typedError.errorCode).toBe(HttpStatusCode.UNPROCESSABLE_ENTITY);
+      expect(typedError.message).toEqual(
+        expect.objectContaining({
+          errors: expect.objectContaining({
+            filters: ['filters must be a valid JSON object'],
+          }),
+        }),
+      );
+    }
+  });
+
+  it('should apply filters and fields projection for streaming exports', async () => {
+    const chunks: string[] = [];
+    const streamRecords = jest.fn(async function* ({ filters }: { filters?: Record<string, unknown> | null }) {
+      expect(filters).toEqual({ status: 'published' });
+      yield {
+        id: 101,
+        slug: 'first-post',
+        title: 'First Post',
+        body: 'Hidden body',
+        author_id: 42,
+        tags: ['import'],
+        published_at: '2026-02-09T00:00:00.000Z',
+        status: 'published',
+      };
+    });
+
+    const result = await streamExports({
+      entityType: 'articles',
+      format: 'json',
+      limit: 1,
+      cursor: null,
+      filters: { status: 'published' },
+      fields: new Set(['id', 'slug', 'status']),
+      writeChunk: async (chunk) => {
+        chunks.push(chunk);
+      },
+      streamRecords,
+    });
+
+    expect(result).toEqual({ count: 1, lastId: 101 });
+    const body = chunks.join('');
+    const parsed = JSON.parse(body);
+    expect(parsed.data).toEqual([
+      {
+        id: 101,
+        slug: 'first-post',
+        status: 'published',
+      },
+    ]);
+    expect(parsed.nextCursor).toBe(101);
+  });
+
+  it('should map created_at and published_at range filters to Prisma where clauses', async () => {
+    prisma.article.findMany.mockResolvedValueOnce([]);
+
+    const records: Array<{ id: number }> = [];
+    for await (const record of streamExportRecords({
+      prisma,
+      entityType: 'articles',
+      limit: 1,
+      filters: {
+        created_at: { gte: '2026-01-01T00:00:00Z', lt: '2026-02-01T00:00:00Z' },
+        published_at: { gte: '2026-01-15T00:00:00Z' },
+      },
+    })) {
+      records.push({ id: record.id });
+    }
+
+    expect(records).toHaveLength(0);
+    expect(prisma.article.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          createdAt: expect.objectContaining({
+            gte: expect.any(Date),
+            lt: expect.any(Date),
+          }),
+          publishedAt: expect.objectContaining({
+            gte: expect.any(Date),
+          }),
+        }),
+      }),
+    );
+  });
 });
 
 describe('runExportJob', () => {
@@ -279,6 +412,155 @@ describe('runExportJob', () => {
     expect(savedFiles).toHaveLength(1);
     expect(savedFiles[0]?.data.startsWith('[')).toBe(true);
     expect(savedFiles[0]?.data.endsWith(']')).toBe(true);
+  });
+
+  it('should apply async export filters and fields selection', async () => {
+    const { storage, savedFiles } = createMemoryStorageAdapter();
+    prisma.exportJob.findUnique.mockResolvedValueOnce({
+      id: 'job-filter-fields',
+      status: 'queued',
+      processedRecords: 0,
+      fileSize: null,
+      startedAt: null,
+      resource: 'articles',
+      format: 'ndjson',
+      outputLocation: null,
+      filters: { status: 'published', author_id: 13 },
+      fields: ['id', 'slug', 'title', 'status', 'published_at'],
+    });
+    prisma.article.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 21,
+          slug: 'filtered-article',
+          title: 'Filtered Article',
+          body: 'Should not be exported',
+          authorId: 13,
+          publishedAt: new Date('2026-02-05T00:00:00Z'),
+          status: 'published',
+          tagList: [{ name: 'backend' }],
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const result = await runExportJob('job-filter-fields', {
+      prisma,
+      storage,
+      now,
+      cancelCheckInterval: 0,
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.processedRecords).toBe(1);
+    expect(prisma.article.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'published',
+          authorId: 13,
+        }),
+      }),
+    );
+
+    const rows = savedFiles[0]?.data.trim().split('\n') ?? [];
+    expect(rows).toHaveLength(1);
+    const exported = JSON.parse(rows[0] as string);
+    expect(Object.keys(exported).sort()).toEqual(
+      ['id', 'slug', 'title', 'status', 'published_at'].sort(),
+    );
+    expect(exported).not.toHaveProperty('body');
+    expect(exported).not.toHaveProperty('author_id');
+    expect(exported).not.toHaveProperty('tags');
+  });
+
+  it('should cap async export at exportMaxRecords and mark metadata as truncated', async () => {
+    const { storage, savedFiles } = createMemoryStorageAdapter();
+    prisma.exportJob.findUnique.mockResolvedValueOnce({
+      id: 'job-truncated',
+      status: 'queued',
+      processedRecords: 0,
+      fileSize: null,
+      startedAt: null,
+      resource: 'users',
+      format: 'ndjson',
+      outputLocation: null,
+    });
+    prisma.user.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 1,
+          email: 'first@example.com',
+          name: 'First',
+          username: 'first',
+          role: 'user',
+          active: true,
+          createdAt: new Date('2026-02-05T00:00:00Z'),
+          updatedAt: new Date('2026-02-05T00:00:00Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 2,
+          email: 'second@example.com',
+          name: 'Second',
+          username: 'second',
+          role: 'user',
+          active: true,
+          createdAt: new Date('2026-02-05T00:00:00Z'),
+          updatedAt: new Date('2026-02-05T00:00:00Z'),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 3,
+          email: 'third@example.com',
+          name: 'Third',
+          username: 'third',
+          role: 'user',
+          active: true,
+          createdAt: new Date('2026-02-05T00:00:00Z'),
+          updatedAt: new Date('2026-02-05T00:00:00Z'),
+        },
+      ]);
+
+    const result = await runExportJob('job-truncated', {
+      prisma,
+      storage,
+      now,
+      cancelCheckInterval: 0,
+    });
+
+    expect(result.status).toBe('succeeded');
+    expect(result.processedRecords).toBe(2);
+    expect(savedFiles).toHaveLength(1);
+    expect(savedFiles[0]?.data).toContain('"id":1');
+    expect(savedFiles[0]?.data).toContain('"id":2');
+    expect(savedFiles[0]?.data).not.toContain('"id":3');
+
+    expect(prisma.exportJob.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'job-truncated' },
+        data: expect.objectContaining({
+          status: 'succeeded',
+          processedRecords: 2,
+          totalRecords: 3,
+        }),
+      }),
+    );
+
+    expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        event: 'job.completed',
+        jobKind: 'export',
+        jobId: 'job-truncated',
+        status: 'succeeded',
+        details: expect.objectContaining({
+          truncated: true,
+          recordLimit: 2,
+          reason: 'max_records_reached',
+        }),
+      }),
+    );
   });
 
   it('should return cancelled immediately when job is already cancelled', async () => {

@@ -6,8 +6,8 @@ import { runExportJob } from './app/routes/exports/export.service';
 import prismaClient from './prisma/prisma-client';
 import { createLogger } from './app/logger';
 
-const importExportLogger = createLogger({ component: 'import-export.worker' });
-const importExportWorker = createImportExportWorker({
+const logger = createLogger({ component: 'import-export.worker' });
+const worker = createImportExportWorker({
   import: async (job: Job<ImportExportJobPayload>) => {
     await runImportJob(job.data.jobId);
   },
@@ -16,20 +16,20 @@ const importExportWorker = createImportExportWorker({
   },
 });
 
-importExportWorker.on('ready', () => {
-  importExportLogger.info({ event: 'worker.ready' });
+worker.on('ready', () => {
+  logger.info({ event: 'worker.ready' });
 });
 
-importExportWorker.on('completed', (job) => {
-  importExportLogger.info({
+worker.on('completed', (job) => {
+  logger.info({
     event: 'job.completed',
     queueJobName: job.name,
     queueJobId: job.id,
   });
 });
 
-importExportWorker.on('failed', (job, error) => {
-  importExportLogger.error({
+worker.on('failed', (job, error) => {
+  logger.error({
     event: 'job.failed',
     queueJobName: job?.name ?? null,
     queueJobId: job?.id ?? null,
@@ -48,17 +48,17 @@ async function shutdown(signal: string) {
 
   shuttingDown = true;
 
-  importExportLogger.info({ event: 'worker.shutdown.requested', signal });
+  logger.info({ event: 'worker.shutdown.requested', signal });
 
   try {
-    await importExportWorker.close();
+    await worker.close();
     await importExportQueue.close();
     await importExportConnection.quit();
     await prismaClient.$disconnect();
-    importExportLogger.info({ event: 'worker.shutdown.completed' });
+    logger.info({ event: 'worker.shutdown.completed' });
     process.exit(0);
   } catch (error) {
-    importExportLogger.error({
+    logger.error({
       event: 'worker.shutdown.failed',
       errorName: error instanceof Error ? error.name : 'UnknownError',
       errorMessage: error instanceof Error ? error.message : String(error),

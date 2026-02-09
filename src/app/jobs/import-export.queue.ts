@@ -29,7 +29,7 @@ const defaultJobOptions: JobsOptions = {
 export function enqueueImportJob(payload: Omit<ImportExportJobPayload, 'type'>, options?: JobsOptions) {
   return importExportQueue.add('import', { ...payload, type: 'import' }, {
     ...defaultJobOptions,
-    jobId: `import:${payload.jobId}`,
+    jobId: `import-${payload.jobId}`,
     ...options,
   });
 }
@@ -37,7 +37,7 @@ export function enqueueImportJob(payload: Omit<ImportExportJobPayload, 'type'>, 
 export function enqueueExportJob(payload: Omit<ImportExportJobPayload, 'type'>, options?: JobsOptions) {
   return importExportQueue.add('export', { ...payload, type: 'export' }, {
     ...defaultJobOptions,
-    jobId: `export:${payload.jobId}`,
+    jobId: `export-${payload.jobId}`,
     ...options,
   });
 }

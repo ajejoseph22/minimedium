@@ -6,6 +6,7 @@ export interface StreamExportOptions {
   entityType: EntityType;
   limit?: number;
   cursor?: number | null;
+  filters?: Record<string, unknown> | null;
   prisma?: PrismaClient;
   batchSize?: number;
   signal?: AbortSignal;
@@ -86,6 +87,8 @@ export interface StreamExportsOptions {
   format: FileFormat;
   limit: number;
   cursor: number | null;
+  filters?: Record<string, unknown> | null;
+  fields?: Set<string> | null;
   signal?: AbortSignal;
   writeChunk: (chunk: string) => Promise<void>;
   onRecord?: (progress: { count: number; lastId: number }) => void;
@@ -93,6 +96,7 @@ export interface StreamExportsOptions {
     entityType: EntityType;
     limit: number;
     cursor: number | null;
+    filters?: Record<string, unknown> | null;
     signal?: AbortSignal;
   }) => AsyncGenerator<ExportRecord>;
 }
@@ -107,6 +111,8 @@ export interface ExportQuery {
   format: FileFormat;
   limit: number;
   cursor: number | null;
+  filters: Record<string, unknown> | null;
+  fields: Set<string> | null;
 }
 
 export interface ExportFileMetadata {

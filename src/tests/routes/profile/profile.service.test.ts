@@ -1,7 +1,7 @@
-import prisma from '../../prisma/prisma-client';
-import { followUser, getProfile, unfollowUser } from '../../app/routes/profile/profile.service';
+import prisma from '../../../prisma/prisma-client';
+import { followUser, getProfile, unfollowUser } from '../../../app/routes/profile/profile.service';
 
-jest.mock('../../prisma/prisma-client', () => ({
+jest.mock('../../../prisma/prisma-client', () => ({
   __esModule: true,
   default: {
     user: {

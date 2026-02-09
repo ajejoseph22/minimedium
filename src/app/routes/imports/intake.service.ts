@@ -20,6 +20,7 @@ const ALLOWED_CONTENT_TYPES = new Set([
   'text/plain',
   'text/json',
 ]);
+const ALLOWED_EXTENSIONS = new Set(['.json', '.ndjson', '.jsonl']);
 
 const config = loadImportConfig();
 
@@ -84,7 +85,10 @@ export function createImportUploadMiddleware(fieldName = 'file') {
     },
     fileFilter: (_req, file, cb) => {
       const contentType = normalizeContentType(file.mimetype);
-      if (!contentType || !ALLOWED_CONTENT_TYPES.has(contentType)) {
+      const hasAllowedContentType = isAllowedContentType(contentType);
+      const hasAllowedExtension = isAllowedExtension(file.originalname);
+
+      if (!hasAllowedContentType && !hasAllowedExtension) {
         return cb(new ImportExportError(FileErrorCode.UNSUPPORTED_FORMAT, 'Unsupported content type'));
       }
       cb(null, true);
@@ -107,7 +111,10 @@ export function mapUploadedFileToImportIntakeResult(file: UploadedFile): ImportI
 
 export async function validateUploadedFile(file: UploadedFile): Promise<void> {
   const contentType = normalizeContentType(file.mimetype);
-  if (!contentType || !ALLOWED_CONTENT_TYPES.has(contentType)) {
+  const hasAllowedContentType = isAllowedContentType(contentType);
+  const hasAllowedExtension = isAllowedExtension(file.originalname);
+
+  if (!hasAllowedContentType && !hasAllowedExtension) {
     throw new ImportExportError(FileErrorCode.UNSUPPORTED_FORMAT, 'Unsupported content type');
   }
   if (file.size === 0) {
@@ -146,7 +153,10 @@ export async function fetchRemoteImport(options: RemoteFetchOptions): Promise<Im
   }
 
   const contentType = normalizeContentType(response.headers['content-type']);
-  if (!contentType || !ALLOWED_CONTENT_TYPES.has(contentType)) {
+  const hasAllowedContentType = isAllowedContentType(contentType);
+  const hasAllowedExtension = isAllowedExtension(fileName);
+
+  if (!hasAllowedContentType && !hasAllowedExtension) {
     throw new ImportExportError(FileErrorCode.UNSUPPORTED_FORMAT, 'Unsupported content type');
   }
 
@@ -189,6 +199,15 @@ function normalizeContentType(contentType?: string): string | null {
     return null;
   }
   return contentType.split(';')[0]?.trim().toLowerCase() ?? null;
+}
+
+function isAllowedContentType(contentType: string | null): boolean {
+  return Boolean(contentType && ALLOWED_CONTENT_TYPES.has(contentType));
+}
+
+function isAllowedExtension(fileName: string): boolean {
+  const extension = path.extname(fileName).toLowerCase();
+  return ALLOWED_EXTENSIONS.has(extension);
 }
 
 function parseUrl(value: string): URL {

@@ -98,7 +98,13 @@ export async function* parseJsonArrayStream<T>(
   input: Readable,
   options: ParseOptions
 ): AsyncGenerator<ParsedRecord<T>> {
-  const stream = input.pipe(jsonParser()).pipe(streamArray());
+  const parser = jsonParser();
+  const arrayStream = streamArray();
+  parser.on('error', (error) => {
+    // Ensure parser failures are surfaced through the async iterator stream.
+    arrayStream.destroy(error);
+  });
+  const stream = input.pipe(parser).pipe(arrayStream);
   let recordCount = 0;
 
   try {
@@ -119,5 +125,7 @@ export async function* parseJsonArrayStream<T>(
     );
   } finally {
     stream.destroy();
+    parser.destroy();
+    arrayStream.destroy();
   }
 }

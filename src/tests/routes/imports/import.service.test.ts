@@ -42,15 +42,17 @@ jest.mock('../../../app/jobs/observability', () => ({
   logJobLifecycleEvent: jest.fn(),
 }));
 
-import { parseJsonArrayStream } from '../../../app/routes/imports/parsing.service';
+import { parseJsonArrayStream, parseNdjsonStream } from '../../../app/routes/imports/parsing.service';
 import { validateImportRecord } from '../../../app/routes/imports/validation/validation.service';
 import { upsertImportRecords } from '../../../app/routes/imports/upsert.service';
+import { ProcessingErrorCode } from '../../../app/routes/shared/import-export/types';
 
 const prisma: any = prismaMock;
 const logJobLifecycleEventMock = logJobLifecycleEvent as jest.MockedFunction<typeof logJobLifecycleEvent>;
 
 describe('Import Service', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     logJobLifecycleEventMock.mockClear();
   });
 
@@ -269,6 +271,19 @@ describe('Import Service', () => {
     const result = await runImportJob('job-failed', { prisma, cancelCheckInterval: 0 });
 
     expect(result.status).toBe('failed');
+    expect(prisma.importJob.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { id: 'job-failed' },
+        data: expect.objectContaining({
+          status: 'failed',
+          errorSummary: expect.objectContaining({
+            lastError: expect.objectContaining({
+              message: 'some error',
+            }),
+          }),
+        }),
+      }),
+    );
     expect(logJobLifecycleEventMock).toHaveBeenCalledTimes(2);
     expect(logJobLifecycleEventMock).toHaveBeenNthCalledWith(
       1,
@@ -295,6 +310,84 @@ describe('Import Service', () => {
         }),
         details: expect.objectContaining({
           message: 'some error',
+        }),
+      }),
+    );
+  });
+
+  it('should fail when ndjson parser yields non-object record structure', async () => {
+    prisma.importJob.findUnique.mockResolvedValue({
+      id: 'job-ndjson-structure',
+      status: 'queued',
+      resource: 'articles',
+      format: 'ndjson',
+      fileName: 'input.ndjson',
+      sourceLocation: '/tmp/input.ndjson',
+      processedRecords: 0,
+      successCount: 0,
+      errorCount: 0,
+      startedAt: null,
+    });
+    prisma.importJob.updateMany.mockResolvedValue({ count: 1 });
+    prisma.importJob.update.mockResolvedValue({});
+    prisma.importError.createMany.mockResolvedValue({ count: 1 });
+
+    (parseNdjsonStream as jest.Mock).mockImplementation(async function* () {
+      yield { record: [{ id: 1 }], index: 0, lineNumber: 1 };
+    });
+
+    const result = await runImportJob('job-ndjson-structure', { prisma, cancelCheckInterval: 0 });
+
+    expect(result).toEqual({
+      status: 'failed',
+      processedRecords: 0,
+      successCount: 0,
+      errorCount: 0,
+    });
+    expect(validateImportRecord).not.toHaveBeenCalled();
+    expect(upsertImportRecords).not.toHaveBeenCalled();
+    const createManyCall = prisma.importError.createMany.mock.calls[0]?.[0];
+    expect(createManyCall?.data?.[0]).toEqual(
+      expect.objectContaining({
+        recordIndex: -1,
+        errorCode: ProcessingErrorCode.INVALID_RECORD_STRUCTURE,
+        errorName: 'INVALID_RECORD_STRUCTURE',
+      }),
+    );
+  });
+
+  it('should fallback to single insert when fatal error createMany fails', async () => {
+    prisma.importJob.findUnique.mockResolvedValue({
+      id: 'job-fatal-fallback',
+      status: 'queued',
+      resource: 'users',
+      format: 'json',
+      fileName: 'input.json',
+      sourceLocation: '/tmp/input.json',
+      processedRecords: 0,
+      successCount: 0,
+      errorCount: 0,
+      startedAt: null,
+    });
+    prisma.importJob.updateMany.mockResolvedValue({ count: 1 });
+    prisma.importJob.update.mockResolvedValue({});
+    prisma.importError.createMany.mockRejectedValueOnce(new Error('createMany failed'));
+    prisma.importError.create.mockResolvedValueOnce({
+      id: 'err-fallback',
+    });
+
+    (parseJsonArrayStream as jest.Mock).mockImplementation(async function* () {
+      throw new Error('invalid json');
+    });
+
+    const result = await runImportJob('job-fatal-fallback', { prisma, cancelCheckInterval: 0 });
+
+    expect(result.status).toBe('failed');
+    expect(prisma.importError.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          jobId: 'job-fatal-fallback',
+          recordIndex: -1,
         }),
       }),
     );

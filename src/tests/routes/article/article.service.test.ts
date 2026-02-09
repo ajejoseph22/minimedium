@@ -1,9 +1,9 @@
-import prismaMock from '../prisma-mock';
+import prismaMock from '../../prisma-mock';
 import {
   deleteComment,
   favoriteArticle,
   unfavoriteArticle,
-} from '../../app/routes/article/article.service';
+} from '../../../app/routes/article/article.service';
 
 describe('ArticleService', () => {
   describe('deleteComment', () => {

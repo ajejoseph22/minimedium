@@ -1,4 +1,4 @@
-import profileMapper from '../../app/routes/profile/profile.utils';
+import profileMapper from '../../../app/routes/profile/profile.utils';
 
 describe('ProfileUtils', () => {
   describe('profileMapper', () => {

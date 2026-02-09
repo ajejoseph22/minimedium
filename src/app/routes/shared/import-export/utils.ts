@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import type { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import HttpException from '../../../models/http-exception.model';
+import { HttpStatusCode } from '../../../models/http-status-code.model';
 import { EntityType, FileFormat } from './types';
 
 export function isLocalHostname(host: string): boolean {
@@ -70,7 +71,7 @@ export interface AuthenticatedRequest extends Request {
 export function requireUserId(req: AuthenticatedRequest): number {
   const userId = req.auth?.user?.id;
   if (typeof userId !== 'number') {
-    throw new HttpException(401, {
+    throw new HttpException(HttpStatusCode.UNAUTHORIZED, {
       errors: { auth: ['missing authorization credentials'] },
     });
   }
@@ -80,6 +81,16 @@ export function requireUserId(req: AuthenticatedRequest): number {
 export function getIdempotencyKey(req: Request): string | undefined {
   const key = req.get('Idempotency-Key')?.trim();
   return key && key.length > 0 ? key : undefined;
+}
+
+export function requireIdempotencyKey(req: Request): string {
+  const key = getIdempotencyKey(req);
+  if (!key) {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
+      errors: { idempotencyKey: ['Idempotency-Key header is required'] },
+    });
+  }
+  return key;
 }
 
 export function getQueryParamValue(value: unknown): string | undefined {
@@ -96,7 +107,7 @@ export function getQueryParamValue(value: unknown): string | undefined {
 
 export function parseEntityType(value: string | undefined): EntityType {
   if (!value) {
-    throw new HttpException(422, {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
       errors: { resource: ['resource is required'] },
     });
   }
@@ -108,7 +119,7 @@ export function parseEntityType(value: string | undefined): EntityType {
   ) {
     return normalized as EntityType;
   }
-  throw new HttpException(422, {
+  throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
     errors: { resource: ['resource must be one of users, articles, comments'] },
   });
 }
@@ -121,7 +132,7 @@ export function parseFormat(value?: string): FileFormat {
   if (normalized === 'ndjson' || normalized === 'json') {
     return normalized as FileFormat;
   }
-  throw new HttpException(422, {
+  throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
     errors: { format: ['format must be json or ndjson'] },
   });
 }
@@ -142,12 +153,12 @@ export function parseLimit(
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new HttpException(422, {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
       errors: { limit: ['limit must be a positive integer'] },
     });
   }
   if (parsed > maxRecords) {
-    throw new HttpException(422, {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
       errors: { limit: [`limit must be <= ${maxRecords}`] },
     });
   }
@@ -160,7 +171,7 @@ export function parseCursor(value?: string): number | null {
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new HttpException(422, {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
       errors: { cursor: ['cursor must be a positive integer'] },
     });
   }
@@ -178,7 +189,7 @@ export function parsePositiveInteger(
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0 || parsed > maxValue) {
-    throw new HttpException(422, {
+    throw new HttpException(HttpStatusCode.UNPROCESSABLE_ENTITY, {
       errors: {
         [fieldName]: [`${fieldName} must be a positive integer <= ${maxValue}`],
       },
@@ -208,6 +219,14 @@ export function normalizeJsonValue(
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isPrismaUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  return (error as { code?: string }).code === 'P2002';
 }
 
 export function round(value: number, digits: number): number {
