@@ -4,12 +4,17 @@ import { runImportJob } from '../../../app/routes/imports/import.service';
 import { ValidationErrorCode } from '../../../app/routes/shared/import-export/types';
 import { logJobLifecycleEvent } from '../../../app/jobs/observability';
 
-jest.mock('fs', () => ({
-  createReadStream: jest.fn(() => new Readable({ read() { this.push(null); } })),
-  promises: {
-    stat: jest.fn().mockResolvedValue({}),
-  },
-}));
+jest.mock('fs', () => {
+  const actualFs = jest.requireActual('fs');
+  return {
+    ...actualFs,
+    createReadStream: jest.fn(() => new Readable({ read() { this.push(null); } })),
+    promises: {
+      ...actualFs.promises,
+      stat: jest.fn().mockResolvedValue({}),
+    },
+  };
+});
 
 jest.mock('../../../app/routes/imports/parsing.service', () => {
   const actual = jest.requireActual('../../../app/routes/imports/parsing.service');
