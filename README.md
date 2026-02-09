@@ -6,6 +6,19 @@ The codebase uses [the RealWorld Node + Express starter](https://github.com/goth
 
 This README focuses on the import/export system: API surface, runtime architecture, configuration, local/dev/prod workflows, and expected behavior.
 
+## Quick Navigation
+
+- [Architecture](#architecture)
+- [Feature Summary](#feature-summary)
+- [Data Model (Import/Export)](#data-model-importexport)
+- [Job Status Semantics](#job-status-semantics)
+- [API Surface](#api-surface)
+- [Configuration](#configuration)
+- [Local Development](#local-development)
+- [Scripts](#scripts)
+- [Testing](#testing)
+- [To Be Implemented](#to-be-implemented)
+
 ## Architecture
 
 ```mermaid
