@@ -1,11 +1,9 @@
 {
-  "name": "@api/source",
-  "version": "0.0.0",
+  "name": "minimedium-backend",
+  "version": "0.0.1",
   "license": "MIT",
   "scripts": {
-    "start:api": "nx serve api",
-    "start:worker": "nx run api:serve-worker",
-    "start:all": "nx run api:serve-all",
+    "start:all": "sh -c \"npm run run:worker & npm run run:api\"",
     "dev:api": "nodemon --legacy-watch --watch src --ext ts,json --exec \"tsx src/main.ts\"",
     "dev:worker": "nodemon --legacy-watch --watch src --ext ts,json --exec \"tsx src/worker.ts\"",
     "run:api": "tsx src/main.ts",
@@ -14,8 +12,8 @@
     "dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
     "prod:up": "docker compose -f docker-compose.yml up -d",
     "prod:down": "docker compose -f docker-compose.yml down",
-    "build": "nx build",
-    "test": "nx test"
+    "build": "tsc -p tsconfig.app.json",
+    "test": "jest"
   },
   "private": true,
   "prisma": {
@@ -43,13 +41,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@nx/esbuild": "17.2.6",
-    "@nx/eslint": "17.2.6",
-    "@nx/eslint-plugin": "17.2.6",
-    "@nx/jest": "17.2.6",
-    "@nx/js": "17.2.6",
-    "@nx/node": "17.2.6",
-    "@nx/workspace": "17.2.6",
     "@swc-node/register": "~1.6.7",
     "@swc/core": "~1.3.85",
     "@types/bcryptjs": "^2.4.6",
@@ -67,7 +58,6 @@
     "jest-environment-node": "^29.4.1",
     "jest-mock-extended": "^3.0.5",
     "nodemon": "^3.1.11",
-    "nx": "17.2.6",
     "pino-pretty": "^13.1.3",
     "prettier": "^2.6.2",
     "prisma": "^4.16.1",

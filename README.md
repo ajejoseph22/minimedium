@@ -413,7 +413,7 @@ JWT_SECRET=some-jwt-secret
 npm install
 ```
 
-### Run with Docker Compose
+### Run with Docker Compose (recommended)
 
 Dev stack with live-reload and logs in the foreground:
 
@@ -436,6 +436,7 @@ npm run dev:down # if using dev stack
 
 ## Scripts
 
+- `npm run start:all` - run API + worker without watcher
 - `npm run dev:api` - run API with nodemon
 - `npm run dev:worker` - run worker with nodemon
 - `npm run run:api` - run API without watcher
@@ -444,6 +445,7 @@ npm run dev:down # if using dev stack
 - `npm run dev:down` - stop dev Docker Compose stack and delete containers
 - `npm run prod:up` - run Docker compose base stack (detached)
 - `npm run prod:down` - stop Docker compose base stack and delete containers
+- `npm run build` - build TypeScript to JavaScript in `dist/`
 - `npm test` - all tests
 
 ## Testing
