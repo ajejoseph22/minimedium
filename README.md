@@ -34,10 +34,11 @@ flowchart LR
   C -->|"Import/Export request"| API
   API -->|"Import/Export response"| C
   API -->|"Enqueue job"| Q
-  Q -->|"Queue job push"| W
-  W -->|"Read/Persist job status"| DB
+  Q -->|"Job claim"| W
+  W -->|"Read/Persist jobs, records & errors"| DB
   W -->|"Read/Persist records"| S
-  API -->|"Read/Persist job status"| DB
+  API -->|"Read/Persist jobs + Read records"| DB
+  API -->|"Read/Persist records"| S
 ```
 
 ## Feature Summary
